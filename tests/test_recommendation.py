@@ -1,0 +1,85 @@
+from app.recommendation import recommendation as rec
+
+
+class FakeEmbeddingModel:
+    def __call__(self, text):
+        return [0.0] * 384
+
+
+class FakeEmbeddingResponse:
+    def __init__(self, embedding):
+        self.embedding = embedding
+
+
+class FakeEmbeddingsClient:
+    def __init__(self, api_key):
+        self.api_key = api_key
+
+    def create(self, model, input):
+        return type("Response", (), {"data": [FakeEmbeddingResponse([0.0] * 384)]})()
+
+
+def test_embed_text_returns_384_dimensions(monkeypatch):
+    monkeypatch.setattr(rec, "_resolve_embedding_provider", lambda: "sentence_transformers")
+    monkeypatch.setattr(rec, "_embed_with_sentence_transformers", lambda text: [0.0] * 384)
+
+    result = rec.embed_text("Customers Interested: improve performance")
+
+    assert len(result) == 384
+    assert all(value == 0.0 for value in result)
+
+
+def test_recommend_for_user_uses_weakest_kii_and_video_language(monkeypatch):
+    monkeypatch.setattr(rec, "calculate_performance", lambda user_id: {
+        "improvement_area": {
+            "kii_id": 121,
+            "kii_name": "Customers Interested",
+            "performance_percentage": 38.1,
+        }
+    })
+    monkeypatch.setattr(rec, "get_user", lambda user_id, db_engine=None: {
+        "video_language_id": 2,
+    })
+    monkeypatch.setattr(rec, "embed_text", lambda text: [0.1] * 384)
+
+    captured = {}
+
+    def fake_search_videos(kii_id, language_id, query_embedding, db_engine, user_id):
+        captured["kii_id"] = kii_id
+        captured["language_id"] = language_id
+        captured["embedding_len"] = len(query_embedding)
+        captured["user_id"] = user_id
+        return {
+            "video_id": 123,
+            "title": "Improve Customer Conversations",
+            "description": "Practical guidance for customer engagement.",
+            "language_id": 2,
+        }
+
+    monkeypatch.setattr(rec, "search_videos", fake_search_videos)
+
+    result = rec.recommend_for_user(953)
+
+    assert result["kii_id"] == 121
+    assert result["kii_name"] == "Customers Interested"
+    assert result["performance_percentage"] == 38.1
+    assert result["video_id"] == 123
+    assert captured["kii_id"] == 121
+    assert captured["language_id"] == 2
+    assert captured["embedding_len"] == 384
+    assert captured["user_id"] == 953
+
+
+def test_recommend_for_user_returns_none_when_no_match(monkeypatch):
+    monkeypatch.setattr(rec, "calculate_performance", lambda user_id: {
+        "improvement_area": {
+            "kii_id": 120,
+            "kii_name": "Productivity",
+            "performance_percentage": 55.0,
+        }
+    })
+    monkeypatch.setattr(rec, "get_user", lambda user_id, db_engine=None: {"video_language_id": 2})
+    monkeypatch.setattr(rec, "embed_text", lambda text: [0.0] * 384)
+    monkeypatch.setattr(rec, "search_videos", lambda **kwargs: None)
+
+    assert rec.recommend_for_user(953) is None
