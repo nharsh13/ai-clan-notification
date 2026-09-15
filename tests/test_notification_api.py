@@ -1,9 +1,95 @@
 from fastapi.testclient import TestClient
 
 from app.main import app, service
+from app.notifications.models import NotificationResponse
 
 
 client = TestClient(app)
+
+
+def test_performance_send_matches_contract_and_forwards_selected_video(monkeypatch):
+    def build_notification(request):
+        assert request.user_id == 953
+        assert request.campaign_day == 2
+        return NotificationResponse(
+            user_id=953,
+            flow="performance",
+            campaign_day=2,
+            action="Watch now",
+            audience_strategy="dynamic",
+            cohort_key="ai_clan",
+            creator_name="Coach",
+            deep_link="/videos/55",
+            notification_body="Keep building your communication skills.",
+            notification_title="Ava, watch this next",
+            notification_type="video_recommendation",
+            should_send=True,
+            video_id=55,
+            video_title="Communicate clearly",
+            reference_id=55,
+            video_popup="Y",
+            remote_send_status="sent",
+            remote_send_response={
+                "remote_url": "REMOTE_NOTIFICATION_SEND_URL",
+                "request_payload": [{
+                    "description": "Keep building your communication skills.",
+                    "notification_type": "video_recommendation",
+                    "reference_id": 55,
+                    "title": "Ava, watch this next",
+                    "user_id": 953,
+                    "video_popup": "Y",
+                }],
+                "response": {},
+                "status_code": 200,
+            },
+        )
+
+    monkeypatch.setattr(service, "build_notification", build_notification)
+    response = client.post("/notification/send", json={"campaign_day": 2, "user_id": 953})
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["success"] is True
+    assert result["user_id"] == 953
+    assert set(result["notification"]) == {
+        "action",
+        "audience_strategy",
+        "campaign_day",
+        "cohort_key",
+        "creator_name",
+        "deep_link",
+        "notification_body",
+        "notification_title",
+        "notification_type",
+        "reference_id",
+        "should_send",
+        "video_id",
+        "video_popup",
+        "video_title",
+    }
+    assert result["notification"]["video_title"] == "Communicate clearly"
+    assert result["remote_send_response"]["request_payload"][0]["user_id"] == 953
+
+
+def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "build_notification",
+        lambda request: NotificationResponse(
+            user_id=request.user_id,
+            flow="performance",
+            notification_title="Title",
+            notification_body="Body",
+            should_send=True,
+            remote_send_status="failed",
+            error="Remote API error 503",
+        ),
+    )
+
+    response = client.post("/notification/send", json={"campaign_day": 2, "user_id": 953})
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Remote API error 503"
 
 
 def test_performance_endpoint_is_read_only(monkeypatch):
@@ -86,36 +172,13 @@ def test_sentiment_endpoint_is_read_only(monkeypatch):
     assert response.json()["responses"][0]["recommended_action_to_manager"] == "Recognize progress"
 
 
-def test_sentiment_post_processes_notification(monkeypatch):
-    sentiment_data = {
-        "user_id": 953,
-        "notification": {
-            "response_id": 10,
-            "question_id": 1,
-            "answer_id": 3,
-            "question": "How is work going?",
-            "answer": "Well",
-        },
-    }
-
-    monkeypatch.setattr(
-        service,
-        "process_sentiment_notification",
-        lambda user_id: sentiment_data,
-    )
-    monkeypatch.setattr(
-        service,
-        "build_notification",
-        lambda _: (_ for _ in ()).throw(AssertionError("wrong notification path")),
-    )
-
+def test_send_rejects_internal_notification_fields():
     response = client.post(
         "/notification/send",
-        json={"user_id": 953, "flow": "sentiment"},
+        json={"campaign_day": 2, "user_id": 953, "flow": "sentiment"},
     )
 
-    assert response.status_code == 200
-    assert response.json() == sentiment_data
+    assert response.status_code == 422
 
 
 def test_sentiment_response_shape_is_qa_only(monkeypatch):

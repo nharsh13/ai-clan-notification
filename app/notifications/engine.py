@@ -27,6 +27,7 @@ class NotificationEngine:
         video_id: int | None = None,
         video_title: str | None = None,
         creator_name: str | None = None,
+        action: str = "Watch now",
         should_send: bool = True,
         video_popup: str | None = None,
     ) -> Notification:
@@ -46,5 +47,5 @@ class NotificationEngine:
             video_popup=video_popup,
             audience_strategy="dynamic",
             cohort_key="ai_clan",
-            action="send",
+            action=action,
         )

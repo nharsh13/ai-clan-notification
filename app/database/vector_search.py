@@ -151,7 +151,7 @@ def query_points(
             c.description,
             c.thumbnail_url,
 
-            COALESCE(ml.language_code, 'en') AS language_code,
+            COALESCE(l.code, 'en') AS language_code,
             c.language_id,
 
             COALESCE(u.name, '') AS creator_name,
@@ -174,8 +174,8 @@ def query_points(
         JOIN public.content c
             ON c.id = latest_embeddings.content_id
 
-        LEFT JOIN public.md_app_languages ml
-            ON ml.id = c.language_id
+        LEFT JOIN public.language l
+            ON l.id = c.language_id
 
         LEFT JOIN public.expert_user e
             ON e.user_id = c.created_by
@@ -219,18 +219,40 @@ def query_points(
 
 def search_videos(
     kii_id: int,
-    language_id: int | None,
+    language_id: int | list[int] | None,
     query_embedding: list[float],
     db_engine=engine,
     user_id: int | None = None,
 ) -> dict[str, Any] | None:
-    sql = text("""
+    language_ids = (
+        [int(language_id)]
+        if isinstance(language_id, int)
+        else [int(value) for value in (language_id or [])]
+    )
+    language_filter = ""
+    params: dict[str, Any] = {
+        "kii_id": kii_id,
+        "user_id": user_id,
+        "embedding": _vector_literal(query_embedding),
+    }
+    if language_ids:
+        language_params = []
+        for index, value in enumerate(language_ids):
+            key = f"language_id_{index}"
+            language_params.append(f":{key}")
+            params[key] = value
+        language_filter = f"AND c.language_id IN ({', '.join(language_params)})"
+    else:
+        language_filter = "AND 1 = 0"
+
+    sql = text(f"""
         SELECT c.id AS video_id, c.title, c.description, c.created_by AS creator_name, c.language_id
         FROM public.kii_content_relation kr
         JOIN public.content c ON c.id = kr.content_id AND c.status = 1
+        JOIN public.language l ON l.id = c.language_id
         JOIN public.content_embeddings ce ON ce.content_id = c.id
         WHERE kr.kii_id = :kii_id AND kr.status = 1
-          AND (:language_id IS NULL OR c.language_id = :language_id)
+          {language_filter}
           AND (
               :user_id IS NULL
               OR NOT EXISTS (
@@ -245,13 +267,5 @@ def search_videos(
         LIMIT 1
     """)
     with db_engine.connect() as connection:
-        row = connection.execute(
-            sql,
-            {
-                "kii_id": kii_id,
-                "language_id": language_id,
-                "user_id": user_id,
-                "embedding": _vector_literal(query_embedding),
-            },
-        ).mappings().first()
+        row = connection.execute(sql, params).mappings().first()
     return dict(row) if row else None

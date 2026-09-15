@@ -21,6 +21,51 @@ def test_load_settings_reads_environment(monkeypatch):
     assert settings.notification_send_url == "https://notify.example/send"
 
 
+def test_sentence_transformers_configuration_is_valid(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db.example/clan")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("EMBED_PROVIDER", "sentence_transformers")
+    monkeypatch.setenv("EMBED_MODEL", "all-MiniLM-L6-v2")
+
+    settings = config.load_settings()
+
+    assert config.validate_configuration(settings).embedding_model == "all-MiniLM-L6-v2"
+
+
+def test_openai_rejects_sentence_transformers_model():
+    settings = config.Settings(
+        database_url="postgresql://db.example/clan",
+        openai_api_key="sk-test",
+        openai_model="gpt-5-nano",
+        embedding_provider="openai",
+        embedding_api_key="sk-test",
+        embedding_model="all-MiniLM-L6-v2",
+        notification_send_url="",
+        notification_timeout_seconds=30,
+        video_deep_link_template="/videos/{video_id}",
+    )
+
+    with pytest.raises(config.ConfigurationError, match="Sentence Transformers"):
+        config.validate_configuration(settings)
+
+
+def test_unsupported_embedding_provider_has_clear_error():
+    settings = config.Settings(
+        database_url="postgresql://db.example/clan",
+        openai_api_key="sk-test",
+        openai_model="gpt-5-nano",
+        embedding_provider="unknown",
+        embedding_api_key="sk-test",
+        embedding_model="text-embedding-3-small",
+        notification_send_url="",
+        notification_timeout_seconds=30,
+        video_deep_link_template="/videos/{video_id}",
+    )
+
+    with pytest.raises(config.ConfigurationError, match="EMBED_PROVIDER"):
+        config.validate_configuration(settings)
+
+
 def test_missing_api_key_has_clear_error(monkeypatch):
     settings = config.Settings(
         database_url="postgresql://db.example/clan",

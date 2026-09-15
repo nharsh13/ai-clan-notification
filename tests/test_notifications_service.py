@@ -13,10 +13,15 @@ class DummySender:
 
 
 class DummyGenerator:
+    def __init__(self):
+        self.prompts = []
+
     def generate(self, prompt):
+        self.prompts.append(prompt)
         return {
             "title": "Growth Check",
             "description": "Keep working on the area that needs the most attention.",
+            "action": "Watch now",
         }
 
 
@@ -27,8 +32,8 @@ def test_build_notification_performance_flow(monkeypatch):
     })
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava",
-        "language_code": "en",
-        "video_language_id": 1,
+        "app_language_code": "hi",
+        "video_language_ids": [1],
     })
     captured = {}
 
@@ -51,7 +56,7 @@ def test_build_notification_performance_flow(monkeypatch):
     assert result.reference_id == 55
     assert result.deep_link == "/videos/55"
     assert result.video_popup == "Y"
-    assert captured == {"kii_name": "KII 117", "language_id": 1, "embedding": service_module.embed_text}
+    assert captured == {"kii_name": "KII 117", "language_id": [1], "embedding": service_module.embed_text}
 
 
 def test_build_notification_engagement_flow(monkeypatch):
@@ -64,8 +69,8 @@ def test_build_notification_engagement_flow(monkeypatch):
     })
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Nia",
-        "language_code": "en",
-        "video_language_id": 1,
+        "app_language_code": "en",
+        "video_language_ids": [1],
     })
 
     service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
@@ -92,8 +97,8 @@ def test_get_performance_contract(monkeypatch):
 def test_performance_flow_passes_performance_query_embedding(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava",
-        "language_code": "fr",
-        "video_language_id": 4,
+        "app_language_code": "fr",
+        "video_language_ids": [4, 7],
     })
     monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
         "improvement_area": {
@@ -126,14 +131,14 @@ def test_performance_flow_passes_performance_query_embedding(monkeypatch):
     assert captured == {
         "query": "query probe",
         "kii": 121,
-        "language": 4,
+        "language": [4, 7],
         "embedding": [0.25] * 384,
     }
 
 
 def test_performance_flow_handles_no_video(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
-        "user_name": "Ava", "language_code": "en", "video_language_id": 1,
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
     })
     monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
         "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
@@ -148,7 +153,7 @@ def test_performance_flow_handles_no_video(monkeypatch):
 
 def test_performance_flow_propagates_llm_failure(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
-        "user_name": "Ava", "language_code": "en", "video_language_id": 1,
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
     })
     monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
         "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
@@ -169,7 +174,7 @@ def test_performance_flow_propagates_llm_failure(monkeypatch):
 
 def test_sender_receives_selected_video_reference(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
-        "user_name": "Ava", "language_code": "en", "video_language_id": 1,
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
     })
     monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
         "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
@@ -187,3 +192,55 @@ def test_sender_receives_selected_video_reference(monkeypatch):
     assert result.remote_send_status == "sent"
     assert sender.calls[0]["reference_id"] == 55
     assert sender.calls[0]["video_popup"] == "Y"
+
+
+def test_app_language_reaches_llm_but_video_languages_reach_recommender(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "ta",
+        "video_language_ids": [2, 5],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {
+            "kii_id": 117,
+            "kii_name": "Focus",
+            "performance_percentage": 10,
+        },
+    })
+    recommender_languages = []
+
+    def fake_recommend(performance, language_id, embed, db_engine, user_id):
+        recommender_languages.append(language_id)
+        return {"video_id": 701, "title": "Focus better"}
+
+    monkeypatch.setattr(service_module, "recommend_video", fake_recommend)
+    generator = DummyGenerator()
+    service = service_module.NotificationService(sender=DummySender(), generator=generator)
+
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False)
+    )
+
+    assert result.reference_id == 701
+    assert result.deep_link == "/videos/701"
+    assert recommender_languages == [[2, 5]]
+    assert "Notification language: ta" in generator.prompts[0]
+
+
+def test_performance_flow_normalizes_numeric_creator_identifier(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {
+        "video_id": 55, "title": "Focus better", "creator_name": 1877,
+    })
+
+    service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False)
+    )
+
+    assert result.creator_name == "1877"

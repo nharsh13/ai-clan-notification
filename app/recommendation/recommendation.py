@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any, Callable
 
 from app.database.connection import engine
@@ -32,9 +33,14 @@ def _embed_with_openai(text: str) -> list[float]:
 
 
 def _embed_with_sentence_transformers(text: str) -> list[float]:
-    model = SentenceTransformer(EMBEDDING_MODEL)
+    model = _get_sentence_transformer()
     embedding = model.encode(text)
     return [float(value) for value in embedding.flatten().tolist()]
+
+
+@lru_cache(maxsize=1)
+def _get_sentence_transformer() -> SentenceTransformer:
+    return SentenceTransformer(EMBEDDING_MODEL)
 
 
 def embed_text(text: str) -> list[float]:
@@ -60,7 +66,7 @@ def embed_text(text: str) -> list[float]:
 
 def recommend_video(
     performance: Any,
-    language_id: int | None,
+    language_id: int | list[int] | None,
     embed: Callable[[str], list[float]],
     db_engine,
     user_id: int | None = None,
@@ -96,7 +102,7 @@ def recommend_for_user(user_id: int, db_engine=engine) -> dict[str, Any] | None:
     weakest = result["improvement_area"]
 
     user = get_user(user_id, db_engine)
-    language_id = None if user is None else user.get("video_language_id")
+    language_id = None if user is None else user.get("video_language_ids")
 
     query = (
         f"{weakest['kii_name']}: improve performance, "

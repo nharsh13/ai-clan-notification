@@ -32,7 +32,7 @@ Instructions:
 5. Do not invent facts, techniques, outcomes, or video details.
 6. Keep the title short and include the user's name.
 7. Keep the description concise.
-8. Return ONLY valid JSON with string keys "title" and "description".
+8. Return ONLY valid JSON with string keys "title", "description", and "action".
 """
 
 
@@ -363,7 +363,14 @@ class NotificationGenerator:
         description = payload.get("description")
         if not isinstance(title, str) or not title.strip() or not isinstance(description, str) or not description.strip():
             raise ValueError("LLM response requires non-empty title and description")
-        return {"title": title.strip(), "description": description.strip()}
+        action = payload.get("action", "Watch now")
+        if not isinstance(action, str) or not action.strip():
+            raise ValueError("LLM response action must be a non-empty string")
+        return {
+            "title": title.strip(),
+            "description": description.strip(),
+            "action": action.strip(),
+        }
 
     def generate(self, prompt: str) -> dict[str, str]:
         client = self.client or _get_openai_client()

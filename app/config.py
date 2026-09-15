@@ -28,8 +28,11 @@ def load_settings() -> Settings:
 
 	openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
 	embedding_provider = os.getenv(
-		"EMBEDDING_PROVIDER",
+		"EMBED_PROVIDER",
+		os.getenv(
+			"EMBEDDING_PROVIDER",
 		"openai" if openai_api_key else "sentence_transformers",
+		),
 	).strip().lower()
 	timeout = os.getenv("REMOTE_NOTIFICATION_TIMEOUT_SECONDS", "30").strip()
 
@@ -55,8 +58,8 @@ def load_settings() -> Settings:
 			os.getenv("EMBEDDING_API_KEY", "").strip() or openai_api_key
 		),
 		embedding_model=os.getenv(
-			"EMBEDDING_MODEL",
-			os.getenv("EMBED_MODEL", default_embedding_model),
+			"EMBED_MODEL",
+			os.getenv("EMBEDDING_MODEL", default_embedding_model),
 		).strip(),
 		notification_send_url=os.getenv("REMOTE_NOTIFICATION_SEND_URL", "").strip(),
 		notification_timeout_seconds=timeout_seconds,
@@ -83,7 +86,15 @@ def validate_configuration(
 		missing.append("REMOTE_NOTIFICATION_SEND_URL")
 	if current.embedding_provider not in {"openai", "sentence_transformers"}:
 		raise ConfigurationError(
-			"EMBEDDING_PROVIDER must be 'openai' or 'sentence_transformers'"
+			"EMBED_PROVIDER must be 'openai' or 'sentence_transformers'"
+		)
+	if (
+		current.embedding_provider == "openai"
+		and current.embedding_model.lower() == "all-minilm-l6-v2"
+	):
+		raise ConfigurationError(
+			"all-MiniLM-L6-v2 is a Sentence Transformers model and cannot be used "
+			"with EMBED_PROVIDER=openai; use EMBED_PROVIDER=sentence_transformers"
 		)
 	if current.embedding_provider == "openai" and not current.embedding_api_key:
 		missing.append("EMBEDDING_API_KEY or OPENAI_API_KEY")

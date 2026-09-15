@@ -50,18 +50,17 @@ class NotificationService:
         if profile is None:
             raise ValueError(f"User not found: {user_id}")
 
-        language_code = str(
-            profile.get("language_code") or profile.get("language_name") or ""
-        ).strip().lower()
+        language_code = str(profile.get("app_language_code") or "").strip().lower()
         if not language_code:
-            raise ValueError(f"User language is missing: {user_id}")
-        if require_video_language and profile.get("video_language_id") is None:
+            raise ValueError(f"App language is missing: {user_id}")
+        video_language_ids = profile.get("video_language_ids") or []
+        if require_video_language and not video_language_ids:
             raise ValueError(f"User video language is missing: {user_id}")
 
         return {
             "user_name": profile.get("user_name") or profile.get("name") or f"User {user_id}",
-            "language_code": language_code,
-            "video_language_id": profile.get("video_language_id"),
+            "app_language_code": language_code,
+            "video_language_ids": [int(value) for value in video_language_ids],
         }
 
     def _fallback_notification(self, flow: str, user_name: str, context: str) -> dict[str, str]:
@@ -108,7 +107,7 @@ class NotificationService:
             require_video_language=request.flow == "performance",
         )
         user_name = str(profile["user_name"]).strip() or f"User {request.user_id}"
-        language = str(profile["language_code"]).strip()
+        language = str(profile["app_language_code"]).strip()
         if request.flow == "engagement":
             response_data = get_user_response_rate(request.user_id)
             return user_name, {
@@ -129,7 +128,7 @@ class NotificationService:
         weakest = calc.get("improvement_area")
         if not weakest:
             raise ValueError(f"No weakest KII found for user: {request.user_id}")
-        language_id = profile.get("video_language_id")
+        language_id = profile.get("video_language_ids")
         performance = type(
             "PerformanceContext",
             (),
@@ -226,7 +225,12 @@ class NotificationService:
             video = payload["video"]
             video_id = video["video_id"]
             video_title = video.get("title")
-            creator_name = video.get("creator_name") or request.creator_name
+            creator_name_value = video.get("creator_name") or request.creator_name
+            creator_name = (
+                str(creator_name_value)
+                if creator_name_value is not None
+                else None
+            )
             reference_id = video_id
         else:
             video_id = request.video_id or payload.get("video_id")
@@ -245,7 +249,10 @@ class NotificationService:
         notification = self.engine.make_notification(
             user_id=request.user_id,
             flow=request.flow,
-            notification_type=request.notification_type or request.flow,
+            notification_type=(
+                request.notification_type
+                or ("video_recommendation" if request.flow == "performance" else request.flow)
+            ),
             title=notification_data["title"],
             description=notification_data["description"],
             reference_id=reference_id,
@@ -253,6 +260,7 @@ class NotificationService:
             video_id=video_id,
             video_title=video_title,
             creator_name=creator_name,
+            action=notification_data.get("action", "Watch now"),
             should_send=request.should_send,
             video_popup=video_popup,
         )

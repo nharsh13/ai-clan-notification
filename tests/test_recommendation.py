@@ -29,6 +29,37 @@ def test_embed_text_returns_384_dimensions(monkeypatch):
     assert all(value == 0.0 for value in result)
 
 
+def test_sentence_transformers_embedding_path_does_not_use_openai(monkeypatch):
+    class FakeEmbedding:
+        def flatten(self):
+            return self
+
+        def tolist(self):
+            return [0.0] * 384
+
+    class FakeSentenceTransformer:
+        def __init__(self, model_name):
+            assert model_name == "all-MiniLM-L6-v2"
+
+        def encode(self, text):
+            assert text == "local query"
+            return FakeEmbedding()
+
+    monkeypatch.setattr(rec, "EMBEDDING_PROVIDER", "sentence_transformers")
+    monkeypatch.setattr(rec, "EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+    monkeypatch.setattr(rec, "SentenceTransformer", FakeSentenceTransformer)
+    monkeypatch.setattr(
+        rec,
+        "_embed_with_openai",
+        lambda text: (_ for _ in ()).throw(AssertionError("OpenAI was called")),
+    )
+    rec._get_sentence_transformer.cache_clear()
+
+    result = rec.embed_text("local query")
+
+    assert len(result) == 384
+
+
 def test_recommend_for_user_uses_weakest_kii_and_video_language(monkeypatch):
     monkeypatch.setattr(rec, "calculate_performance", lambda user_id: {
         "improvement_area": {
@@ -38,7 +69,7 @@ def test_recommend_for_user_uses_weakest_kii_and_video_language(monkeypatch):
         }
     })
     monkeypatch.setattr(rec, "get_user", lambda user_id, db_engine=None: {
-        "video_language_id": 2,
+        "video_language_ids": [2, 5],
     })
     monkeypatch.setattr(rec, "embed_text", lambda text: [0.1] * 384)
 
@@ -65,7 +96,7 @@ def test_recommend_for_user_uses_weakest_kii_and_video_language(monkeypatch):
     assert result["performance_percentage"] == 38.1
     assert result["video_id"] == 123
     assert captured["kii_id"] == 121
-    assert captured["language_id"] == 2
+    assert captured["language_id"] == [2, 5]
     assert captured["embedding_len"] == 384
     assert captured["user_id"] == 953
 
@@ -78,7 +109,7 @@ def test_recommend_for_user_returns_none_when_no_match(monkeypatch):
             "performance_percentage": 55.0,
         }
     })
-    monkeypatch.setattr(rec, "get_user", lambda user_id, db_engine=None: {"video_language_id": 2})
+    monkeypatch.setattr(rec, "get_user", lambda user_id, db_engine=None: {"video_language_ids": [2]})
     monkeypatch.setattr(rec, "embed_text", lambda text: [0.0] * 384)
     monkeypatch.setattr(rec, "search_videos", lambda **kwargs: None)
 

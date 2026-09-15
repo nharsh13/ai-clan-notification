@@ -9,17 +9,22 @@ def get_user(user_id: int, db_engine=engine) -> dict[str, Any] | None:
     query = text(
         """
         SELECT u.id AS user_id,
-               COALESCE(NULLIF(u.name, ''), NULLIF(u.user_name, ''), '') AS user_name,
+               COALESCE(NULLIF(u.name, ''), '') AS user_name,
                e.account_id,
-               ul.language_id AS video_language_id,
-               l.name AS language_name,
-               l.code AS language_code
+               u.app_language_id,
+               app_lang.language_code AS app_language_code,
+               ARRAY_AGG(DISTINCT ul.language_id) FILTER (WHERE ul.language_id IS NOT NULL)
+                   AS video_language_ids,
+               ARRAY_AGG(DISTINCT l.code) FILTER (WHERE l.code IS NOT NULL)
+                   AS video_language_codes
         FROM public."user" AS u
         LEFT JOIN public.expert_user AS e ON e.user_id = u.id
+        LEFT JOIN public.md_app_languages AS app_lang
+            ON app_lang.id = u.app_language_id
         LEFT JOIN public.user_language AS ul ON ul.user_id = u.id
         LEFT JOIN public.language AS l ON l.id = ul.language_id
         WHERE u.id = :user_id
-        LIMIT 1
+        GROUP BY u.id, u.name, e.account_id, u.app_language_id, app_lang.language_code
         """
     )
     with db_engine.connect() as connection:
