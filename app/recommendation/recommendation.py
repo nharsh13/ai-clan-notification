@@ -1,33 +1,30 @@
 from __future__ import annotations
 
-import os
 from typing import Any, Callable
 
 from app.database.connection import engine
 from app.database.user_repository import get_user
 from app.database.vector_search import search_videos
+from app.config import EMBEDDING_API_KEY, EMBEDDING_MODEL, EMBEDDING_PROVIDER
 from app.performance.performance import calculate_performance
 from sentence_transformers import SentenceTransformer
 EMBEDDING_DIMENSIONS = 384
 
 
 def _resolve_embedding_provider() -> str:
-    if os.getenv("OPENAI_API_KEY"):
-        return "openai"
-    try:
-        import sentence_transformers  # type: ignore
-        _ = sentence_transformers
-        return "sentence_transformers"
-    except Exception:
-        return "fallback"
+    return EMBEDDING_PROVIDER
 
 
 def _embed_with_openai(text: str) -> list[float]:
     from openai import OpenAI
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    if not EMBEDDING_API_KEY:
+        raise ValueError(
+            "Missing required environment variable: EMBEDDING_API_KEY or OPENAI_API_KEY"
+        )
+    client = OpenAI(api_key=EMBEDDING_API_KEY)
     response = client.embeddings.create(
-        model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+        model=EMBEDDING_MODEL,
         input=text,
     )
     embedding = response.data[0].embedding
@@ -35,8 +32,7 @@ def _embed_with_openai(text: str) -> list[float]:
 
 
 def _embed_with_sentence_transformers(text: str) -> list[float]:
-    model_name = os.getenv("EMBED_MODEL", os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2"))
-    model = SentenceTransformer(model_name)
+    model = SentenceTransformer(EMBEDDING_MODEL)
     embedding = model.encode(text)
     return [float(value) for value in embedding.flatten().tolist()]
 
@@ -49,7 +45,10 @@ def embed_text(text: str) -> list[float]:
     elif provider == "sentence_transformers":
         embedding = _embed_with_sentence_transformers(text)
     else:
-        embedding = [0.0] * EMBEDDING_DIMENSIONS
+        raise ValueError(
+            "Unsupported embedding provider. Set EMBEDDING_PROVIDER to "
+            "openai or sentence_transformers."
+        )
 
     if len(embedding) != EMBEDDING_DIMENSIONS:
         raise ValueError(
@@ -69,7 +68,13 @@ def recommend_video(
     if performance is None:
         return None
 
-    query = f"{performance.kii_name}: improve performance"
+    performance_percentage = getattr(performance, "performance_percentage", None)
+    performance_context = (
+        f" current performance {float(performance_percentage):.2f}%"
+        if performance_percentage is not None
+        else ""
+    )
+    query = f"{performance.kii_name}: improve performance{performance_context}"
     query_embedding = embed(query)
 
     if len(query_embedding) != EMBEDDING_DIMENSIONS:
@@ -93,7 +98,10 @@ def recommend_for_user(user_id: int, db_engine=engine) -> dict[str, Any] | None:
     user = get_user(user_id, db_engine)
     language_id = None if user is None else user.get("video_language_id")
 
-    query = f"{weakest['kii_name']}: improve performance"
+    query = (
+        f"{weakest['kii_name']}: improve performance, "
+        f"current performance {float(weakest['performance_percentage']):.2f}%"
+    )
     query_embedding = embed_text(query)
 
     video = search_videos(

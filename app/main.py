@@ -1,10 +1,24 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
+import logging
 
+from app.config import ConfigurationError, validate_configuration
 from app.notifications.models import NotificationRequest
 from app.notifications.sender import NotificationSender
 from app.notifications.service import NotificationService
 
-app = FastAPI(title="AI-CLAN Notification API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        validate_configuration()
+    except ConfigurationError as exc:
+        logging.getLogger(__name__).error("Configuration error: %s", exc)
+        raise
+    yield
+
+
+app = FastAPI(title="AI-CLAN Notification API", lifespan=lifespan)
+
 service = NotificationService(sender=NotificationSender())
 
 

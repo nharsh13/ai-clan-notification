@@ -1,15 +1,13 @@
-import os
 from typing import Any, Dict
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.config import REMOTE_NOTIFICATION_SEND_URL, REMOTE_NOTIFICATION_TIMEOUT_SECONDS
 
 class NotificationSender:
     def __init__(self, remote_url: str | None = None):
         self.remote_url: str = (
             remote_url
-            or os.getenv("REMOTE_NOTIFICATION_SEND_URL")
+            or REMOTE_NOTIFICATION_SEND_URL
             or ""
         )
 
@@ -41,7 +39,7 @@ class NotificationSender:
         response = requests.post(
             self.remote_url,
             json=payload,
-            timeout=30,
+            timeout=REMOTE_NOTIFICATION_TIMEOUT_SECONDS,
         )
 
         if not response.ok:

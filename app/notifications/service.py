@@ -1,22 +1,30 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 
 from app.config import OPENAI_API_KEY
 from app.database.connection import engine
 from app.database.user_repository import get_user
-from app.llm.notification_generator import NotificationGenerator, build_notification_1_prompt, build_notification_2_prompt
+from app.llm.notification_generator import (
+    NotificationGenerator,
+    build_notification_1_prompt,
+    build_notification_2_prompt,
+    build_performance_notification_prompt,
+)
 from app.notifications.engine import NotificationEngine
 from app.notifications.models import NotificationRequest, NotificationResponse
 from app.notifications.sender import NotificationSender
 from app.performance.performance import calculate_performance
-from app.recommendation.recommendation import recommend_video
+from app.recommendation.recommendation import embed_text, recommend_video
 from app.sentiment.sentiment import (
     get_next_sentiment_response,
     get_responses,
     get_user_response_rate,
     save_sentiment_notification_history,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class NotificationService:
@@ -33,17 +41,26 @@ class NotificationService:
         self.db_engine = db_engine
         self.engine = NotificationEngine()
 
-    def _get_user_profile(self, user_id: int) -> dict[str, Any]:
+    def _get_user_profile(
+        self,
+        user_id: int,
+        require_video_language: bool = False,
+    ) -> dict[str, Any]:
         profile = get_user(user_id, self.db_engine)
         if profile is None:
-            return {
-                "user_name": f"User {user_id}",
-                "language_code": "en",
-                "video_language_id": None,
-            }
+            raise ValueError(f"User not found: {user_id}")
+
+        language_code = str(
+            profile.get("language_code") or profile.get("language_name") or ""
+        ).strip().lower()
+        if not language_code:
+            raise ValueError(f"User language is missing: {user_id}")
+        if require_video_language and profile.get("video_language_id") is None:
+            raise ValueError(f"User video language is missing: {user_id}")
+
         return {
             "user_name": profile.get("user_name") or profile.get("name") or f"User {user_id}",
-            "language_code": str(profile.get("language_code") or "en").strip().lower() or "en",
+            "language_code": language_code,
             "video_language_id": profile.get("video_language_id"),
         }
 
@@ -64,39 +81,34 @@ class NotificationService:
         }
 
     def _generate_llm_notification(self, flow: str, user_name: str, payload: dict[str, Any]) -> dict[str, str]:
-        try:
-            if flow == "engagement":
-                prompt = build_notification_1_prompt(
-                    user_name=user_name,
-                    language=payload.get("language", "English"),
-                    response_data=payload["response_data"],
-                )
-            elif flow == "sentiment":
-                prompt = build_notification_2_prompt(
-                    user_name=user_name,
-                    language=payload.get("language", "English"),
-                    prepared_qa=payload["prepared_qa"],
-                )
-            else:
-                weakest = payload["weakest_kii"]
-                video_title = payload.get("video_title") or "the right learning resource"
-                prompt = (
-                    "You are generating a personalized workplace performance notification. "
-                    f"Return valid JSON with keys title and description. "
-                    f"User name: {user_name}. "
-                    f"Language: {payload.get('language', 'English')}. "
-                    f"Current weakest area: {weakest.get('kii_name', 'performance area')} with performance {weakest.get('performance_percentage', 0):.2f}%. "
-                    f"Suggested video: {video_title}. "
-                    "Keep the title short and personal, and keep the description specific, encouraging, and actionable. "
-                )
-            return self.generator.generate(prompt)
-        except Exception:
-            return self._fallback_notification(flow, user_name, payload.get("context", "your current growth area"))
+        if flow == "engagement":
+            prompt = build_notification_1_prompt(
+                user_name=user_name,
+                language=payload.get("language", "English"),
+                response_data=payload["response_data"],
+            )
+        elif flow == "sentiment":
+            prompt = build_notification_2_prompt(
+                user_name=user_name,
+                language=payload.get("language", "English"),
+                prepared_qa=payload["prepared_qa"],
+            )
+        else:
+            prompt = build_performance_notification_prompt(
+                user_name=user_name,
+                language=payload["language"],
+                weakest_kii=payload["weakest_kii"],
+                video=payload["video"],
+            )
+        return self.generator.generate(prompt)
 
     def _build_flow_context(self, request: NotificationRequest) -> tuple[str, dict[str, Any]]:
-        profile = self._get_user_profile(request.user_id)
+        profile = self._get_user_profile(
+            request.user_id,
+            require_video_language=request.flow == "performance",
+        )
         user_name = str(profile["user_name"]).strip() or f"User {request.user_id}"
-        language = str(profile["language_code"]).strip() or "en"
+        language = str(profile["language_code"]).strip()
         if request.flow == "engagement":
             response_data = get_user_response_rate(request.user_id)
             return user_name, {
@@ -112,28 +124,36 @@ class NotificationService:
                 "context": "your recent responses and workplace reflections",
             }
 
-        # performance flow
+        # Performance calculation and video retrieval remain separate concerns.
         calc = calculate_performance(request.user_id)
-        weakest = calc["improvement_area"]
+        weakest = calc.get("improvement_area")
+        if not weakest:
+            raise ValueError(f"No weakest KII found for user: {request.user_id}")
         language_id = profile.get("video_language_id")
-        recommendation = None
-        try:
-            performance = type("Perf", (), {"kii_name": weakest["kii_name"], "kii_id": weakest["kii_id"]})()
-            recommendation = recommend_video(
-                performance,
-                language_id,
-                lambda _: [0.0] * 384,
-                self.db_engine,
-                user_id=request.user_id,
+        performance = type(
+            "PerformanceContext",
+            (),
+            {"kii_name": weakest["kii_name"], "kii_id": weakest["kii_id"]},
+        )()
+        recommendation = recommend_video(
+            performance,
+            language_id,
+            embed_text,
+            self.db_engine,
+            user_id=request.user_id,
+        )
+        if recommendation is None:
+            raise ValueError(
+                f"No suitable video found for KII {weakest['kii_id']} "
+                f"and language {language_id}"
             )
-        except Exception:
-            recommendation = None
 
         return user_name, {
             "language": language,
             "weakest_kii": weakest,
-            "video_title": (recommendation or {}).get("title") if isinstance(recommendation, dict) else None,
-            "video_id": (recommendation or {}).get("video_id") if isinstance(recommendation, dict) else None,
+            "video": recommendation,
+            "video_title": recommendation.get("title"),
+            "video_id": recommendation.get("video_id"),
             "context": weakest.get("kii_name", "your current growth area"),
         }
 
@@ -202,10 +222,25 @@ class NotificationService:
         user_name, payload = self._build_flow_context(request)
         notification_data = self._generate_llm_notification(request.flow, user_name, payload)
 
-        video_id = request.video_id or payload.get("video_id")
-        video_title = request.video_title or payload.get("video_title")
-        creator_name = request.creator_name
+        if request.flow == "performance":
+            video = payload["video"]
+            video_id = video["video_id"]
+            video_title = video.get("title")
+            creator_name = video.get("creator_name") or request.creator_name
+            reference_id = video_id
+        else:
+            video_id = request.video_id or payload.get("video_id")
+            video_title = request.video_title or payload.get("video_title")
+            creator_name = request.creator_name
+            reference_id = request.reference_id or video_id
         deep_link = request.deep_link
+        if request.flow == "performance" and video_id is not None and not deep_link:
+            from app.config import VIDEO_DEEP_LINK_TEMPLATE
+
+            deep_link = VIDEO_DEEP_LINK_TEMPLATE.format(video_id=video_id)
+        video_popup = request.video_popup
+        if request.flow == "performance" and video_popup is None:
+            video_popup = "Y"
 
         notification = self.engine.make_notification(
             user_id=request.user_id,
@@ -213,13 +248,13 @@ class NotificationService:
             notification_type=request.notification_type or request.flow,
             title=notification_data["title"],
             description=notification_data["description"],
-            reference_id=request.reference_id or video_id,
+            reference_id=reference_id,
             deep_link=deep_link,
             video_id=video_id,
             video_title=video_title,
             creator_name=creator_name,
             should_send=request.should_send,
-            video_popup=request.video_popup,
+            video_popup=video_popup,
         )
 
         response = NotificationResponse(
@@ -258,6 +293,11 @@ class NotificationService:
                     response.remote_send_status = "sent"
                     response.remote_send_response = remote_response
                 except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.exception(
+                        "Notification send failed for user=%s flow=%s",
+                        request.user_id,
+                        request.flow,
+                    )
                     response.remote_send_status = "failed"
                     response.error = str(exc)
 

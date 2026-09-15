@@ -1,12 +1,39 @@
 import json
-import os
 
-from dotenv import load_dotenv
 from openai import OpenAI
 
-load_dotenv()
+from app.config import OPENAI_API_KEY, OPENAI_MODEL
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano")
+MODEL = OPENAI_MODEL
+
+
+def build_performance_notification_prompt(
+    user_name: str,
+    language: str,
+    weakest_kii: dict,
+    video: dict,
+) -> str:
+    """Build a prompt for a notification tied to one selected video."""
+
+    return f"""
+You are generating ONE personalized AI-CLAN learning notification.
+
+User name: {user_name}
+Notification language: {language}
+Weakest KII: {weakest_kii.get('kii_name', 'performance area')}
+Current performance: {weakest_kii.get('performance_percentage', 0):.2f}%
+Selected video title: {video.get('title') or 'Untitled learning video'}
+
+Instructions:
+1. Write exactly one positive, motivational, actionable notification.
+2. Write it directly in the requested notification language.
+3. Encourage the user to watch the selected video to improve the weakest KII.
+4. Use only the weakest KII and selected video title supplied above.
+5. Do not invent facts, techniques, outcomes, or video details.
+6. Keep the title short and include the user's name.
+7. Keep the description concise.
+8. Return ONLY valid JSON with string keys "title" and "description".
+"""
 
 
 # ============================================================
@@ -298,15 +325,13 @@ def _get_openai_client() -> OpenAI:
     Create OpenAI client.
     """
 
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
+    if not OPENAI_API_KEY:
         raise ValueError(
-            "OPENAI_API_KEY is not set. "
+            "Missing required environment variable: OPENAI_API_KEY. "
             "Add it to the .env file."
         )
 
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=OPENAI_API_KEY)
 
 
 def _parse_json_response(content: str) -> dict:

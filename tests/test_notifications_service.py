@@ -5,8 +5,10 @@ from app.notifications.models import NotificationRequest
 class DummySender:
     def __init__(self):
         self.remote_url = "https://example.test/notify"
+        self.calls = []
 
     def send(self, **kwargs):
+        self.calls.append(kwargs)
         return {"status": "ok", "payload": kwargs}
 
 
@@ -28,7 +30,15 @@ def test_build_notification_performance_flow(monkeypatch):
         "language_code": "en",
         "video_language_id": 1,
     })
-    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {"video_id": 55, "title": "Focus on clarity"})
+    captured = {}
+
+    def fake_recommend_video(performance, language_id, embed, db_engine, user_id):
+        captured["kii_name"] = performance.kii_name
+        captured["language_id"] = language_id
+        captured["embedding"] = embed
+        return {"video_id": 55, "title": "Focus on clarity", "creator_name": "Coach"}
+
+    monkeypatch.setattr(service_module, "recommend_video", fake_recommend_video)
 
     service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
     result = service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
@@ -38,6 +48,10 @@ def test_build_notification_performance_flow(monkeypatch):
     assert result.notification_title == "Growth Check"
     assert result.video_id == 55
     assert result.video_title == "Focus on clarity"
+    assert result.reference_id == 55
+    assert result.deep_link == "/videos/55"
+    assert result.video_popup == "Y"
+    assert captured == {"kii_name": "KII 117", "language_id": 1, "embedding": service_module.embed_text}
 
 
 def test_build_notification_engagement_flow(monkeypatch):
@@ -73,3 +87,103 @@ def test_get_performance_contract(monkeypatch):
     assert result["user_id"] == 953
     assert result["seven_day_performance"][0]["kii_id"] == 119
     assert result["weakest_kii"]["kii_name"] == "KII 119"
+
+
+def test_performance_flow_passes_performance_query_embedding(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "language_code": "fr",
+        "video_language_id": 4,
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {
+            "kii_id": 121,
+            "kii_name": "Communication",
+            "performance_percentage": 38.1,
+        }
+    })
+    captured = {}
+
+    def fake_embed(text):
+        captured["query"] = text
+        return [0.25] * 384
+
+    monkeypatch.setattr(service_module, "embed_text", fake_embed)
+
+    def fake_recommend(performance, language_id, embed, db_engine, user_id):
+        captured["kii"] = performance.kii_id
+        captured["language"] = language_id
+        captured["embedding"] = embed("query probe")
+        return {"video_id": 88, "title": "Communicate clearly"}
+
+    monkeypatch.setattr(service_module, "recommend_video", fake_recommend)
+    service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
+
+    result = service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
+
+    assert result.video_id == 88
+    assert result.deep_link == "/videos/88"
+    assert captured == {
+        "query": "query probe",
+        "kii": 121,
+        "language": 4,
+        "embedding": [0.25] * 384,
+    }
+
+
+def test_performance_flow_handles_no_video(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "language_code": "en", "video_language_id": 1,
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: None)
+    service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
+
+    import pytest
+    with pytest.raises(ValueError, match="No suitable video"):
+        service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
+
+
+def test_performance_flow_propagates_llm_failure(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "language_code": "en", "video_language_id": 1,
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {
+        "video_id": 55, "title": "Focus better",
+    })
+
+    class FailingGenerator:
+        def generate(self, prompt):
+            raise RuntimeError("LLM unavailable")
+
+    service = service_module.NotificationService(sender=DummySender(), generator=FailingGenerator())
+    import pytest
+    with pytest.raises(RuntimeError, match="LLM unavailable"):
+        service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
+
+
+def test_sender_receives_selected_video_reference(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "language_code": "en", "video_language_id": 1,
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {
+        "video_id": 55, "title": "Focus better",
+    })
+    sender = DummySender()
+    service = service_module.NotificationService(sender=sender, generator=DummyGenerator())
+
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=True)
+    )
+
+    assert result.remote_send_status == "sent"
+    assert sender.calls[0]["reference_id"] == 55
+    assert sender.calls[0]["video_popup"] == "Y"
