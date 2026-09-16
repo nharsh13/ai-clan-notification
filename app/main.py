@@ -27,6 +27,22 @@ def home() -> dict[str, str]:
     return {"message": "AI-CLAN Notification API is running."}
 
 
+
+
+@app.get("/notification/performance")
+def get_performance(user_id: int = Query(gt=0)):
+    return service.get_performance(user_id)
+
+
+@app.get("/notification/engagement")
+def get_engagement(user_id: int = Query(gt=0)):
+    return service.get_engagement(user_id)
+
+
+@app.get("/notification/sentiment")
+def get_sentiment(user_id: int = Query(gt=0)):
+    return service.get_sentiment(user_id)
+
 @app.post("/notification/send")
 def send_notification(request: NotificationSendRequest):
     try:
@@ -70,18 +86,3 @@ def send_notification(request: NotificationSendRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@app.get("/notification/performance")
-def get_performance(user_id: int = Query(gt=0)):
-    return service.get_performance(user_id)
-
-
-@app.get("/notification/engagement")
-def get_engagement(user_id: int = Query(gt=0)):
-    return service.get_engagement(user_id)
-
-
-@app.get("/notification/sentiment")
-def get_sentiment(user_id: int = Query(gt=0)):
-    return service.get_sentiment(user_id)

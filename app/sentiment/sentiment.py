@@ -74,6 +74,32 @@ def prepare_user_qa(user_id: int):
 
 def get_next_sentiment_response(user_id: int, db_engine=engine) -> dict | None:
     query = text("""
+        WITH selected_question AS (
+            SELECT
+                r.question_id,
+                MIN(r.created_at) AS first_created_at,
+                MIN(r.id) AS first_response_id
+            FROM public.user_persona_question_responces r
+            WHERE r.user_id = :user_id
+              AND r.status = 1
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.sentiment_notification_history h
+                  WHERE h.user_id = r.user_id
+                    AND h.question_id = r.question_id
+                    AND h.status = 1
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.sentiment_notification_history h
+                  WHERE h.user_id = :user_id
+                    AND h.status = 1
+                    AND h.created_at::date = CURRENT_DATE
+              )
+            GROUP BY r.question_id
+            ORDER BY first_created_at, first_response_id
+            LIMIT 1
+        )
         SELECT
             r.id AS response_id,
             r.user_id,
@@ -83,6 +109,8 @@ def get_next_sentiment_response(user_id: int, db_engine=engine) -> dict | None:
             a.answer_text AS answer,
             r.created_at
         FROM public.user_persona_question_responces r
+        JOIN selected_question selected
+            ON selected.question_id = r.question_id
         JOIN public.user_persona_question q
             ON q.id = r.question_id
         JOIN public.user_persona_question_answers a
@@ -90,28 +118,19 @@ def get_next_sentiment_response(user_id: int, db_engine=engine) -> dict | None:
            AND a.question_id = r.question_id
         WHERE r.user_id = :user_id
           AND r.status = 1
-          AND NOT EXISTS (
-              SELECT 1
-              FROM public.sentiment_notification_history h
-              WHERE h.user_id = r.user_id
-                AND h.response_id = r.id
-                AND h.status = 1
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM public.sentiment_notification_history h
-              WHERE h.user_id = :user_id
-                AND h.status = 1
-                AND h.created_at::date = CURRENT_DATE
-          )
         ORDER BY r.created_at, r.id
-        LIMIT 1
     """)
 
     with db_engine.connect() as connection:
-        row = connection.execute(query, {"user_id": user_id}).mappings().first()
+        rows = connection.execute(query, {"user_id": user_id}).mappings().all()
 
-    return dict(row) if row else None
+    if not rows:
+        return None
+
+    responses = [dict(row) for row in rows]
+    selected = responses[0]
+    selected["responses"] = responses
+    return selected
 
 
 def save_sentiment_notification_history(

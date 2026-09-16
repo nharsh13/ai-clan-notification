@@ -19,7 +19,6 @@ from app.performance.performance import calculate_performance
 from app.recommendation.recommendation import embed_text, recommend_video
 from app.sentiment.sentiment import (
     get_next_sentiment_response,
-    get_responses,
     get_user_response_rate,
     save_sentiment_notification_history,
 )
@@ -177,22 +176,36 @@ class NotificationService:
         return response_data
 
     def get_sentiment(self, user_id: int) -> dict[str, Any]:
-        responses = get_responses(user_id, self.db_engine)
+        selected_question = get_next_sentiment_response(user_id, self.db_engine)
+        if selected_question is None:
+            return {"user_id": user_id, "responses": []}
+
+        responses = [
+            {
+                "question_id": response["question_id"],
+                "question": response["question"],
+                "answer_id": response["answer_id"],
+                "answer": response["answer"],
+            }
+            for response in selected_question.get("responses", [selected_question])
+        ]
         return {"user_id": user_id, "responses": responses}
 
     def process_sentiment_notification(self, user_id: int) -> dict[str, Any]:
-        response = get_next_sentiment_response(user_id, self.db_engine)
-        if response is None:
+        selected_question = get_next_sentiment_response(user_id, self.db_engine)
+        if selected_question is None:
             return {"user_id": user_id, "notification": None}
 
+        responses = selected_question.get("responses", [selected_question])
         result = {
             "user_id": user_id,
             "notification": {
-                "response_id": response["response_id"],
-                "question_id": response["question_id"],
-                "answer_id": response["answer_id"],
-                "question": response["question"],
-                "answer": response["answer"],
+                "response_id": selected_question["response_id"],
+                "question_id": selected_question["question_id"],
+                "answer_id": selected_question["answer_id"],
+                "question": selected_question["question"],
+                "answer": "\n".join(response["answer"] for response in responses),
+                "responses": responses,
             },
         }
 
@@ -200,12 +213,13 @@ class NotificationService:
             remote_response = self.sender.send(
                 user_id=user_id,
                 notification_type="sentiment",
-                title=response["question"],
-                description=response["answer"],
-                reference_id=int(response["response_id"]),
+                title=selected_question["question"],
+                description="\n".join(response["answer"] for response in responses),
+                reference_id=int(selected_question["response_id"]),
                 video_popup="N",
             )
-            save_sentiment_notification_history(response, self.db_engine)
+            for response in responses:
+                save_sentiment_notification_history(response, self.db_engine)
             result["remote_send_status"] = "sent"
             result["remote_send_response"] = remote_response
         else:
