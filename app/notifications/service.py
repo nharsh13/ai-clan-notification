@@ -20,6 +20,7 @@ from app.recommendation.recommendation import embed_text, recommend_video
 from app.sentiment.sentiment import (
     get_next_sentiment_response,
     get_user_response_rate,
+    prepare_user_qa,
     save_sentiment_notification_history,
 )
 
@@ -212,7 +213,7 @@ class NotificationService:
         if self.sender.remote_url:
             remote_response = self.sender.send(
                 user_id=user_id,
-                notification_type="sentiment",
+                notification_type="SENTIMENT_QA",
                 title=selected_question["question"],
                 description="\n".join(response["answer"] for response in responses),
                 reference_id=int(selected_question["response_id"]),
@@ -231,6 +232,17 @@ class NotificationService:
     def build_notification(self, request: NotificationRequest) -> NotificationResponse:
         if request.user_id <= 0:
             raise ValueError("user_id must be greater than zero")
+
+        if request.notification_type:
+            notification_type = request.notification_type
+        elif request.flow == "performance":
+            notification_type = "VIDEO_RECOMMENDATION"
+        elif request.flow == "engagement":
+            notification_type = "SENTIMENT_ENGAGEMENT"
+        elif request.flow == "sentiment":
+            notification_type = "SENTIMENT_QA"
+        else:
+            notification_type = "VIDEO_RECOMMENDATION"
 
         user_name, payload = self._build_flow_context(request)
         notification_data = self._generate_llm_notification(request.flow, user_name, payload)
@@ -263,10 +275,7 @@ class NotificationService:
         notification = self.engine.make_notification(
             user_id=request.user_id,
             flow=request.flow,
-            notification_type=(
-                request.notification_type
-                or ("video_recommendation" if request.flow == "performance" else request.flow)
-            ),
+            notification_type=notification_type,
             title=notification_data["title"],
             description=notification_data["description"],
             reference_id=reference_id,
@@ -282,7 +291,6 @@ class NotificationService:
         response = NotificationResponse(
             user_id=request.user_id,
             flow=request.flow,
-            campaign_day=request.campaign_day,
             notification_title=notification.notification_title,
             notification_body=notification.notification_body,
             audience_strategy=notification.audience_strategy,
@@ -306,7 +314,7 @@ class NotificationService:
                 try:
                     remote_response = self.sender.send(
                         user_id=request.user_id,
-                        notification_type=notification.notification_type or request.flow,
+                        notification_type=notification.notification_type or notification_type,
                         title=notification.notification_title,
                         description=notification.notification_body,
                         reference_id=int(notification.reference_id or 0),

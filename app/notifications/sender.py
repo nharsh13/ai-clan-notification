@@ -1,7 +1,18 @@
 from typing import Any, Dict
+import logging
+import time
+
 import requests
 
 from app.config import REMOTE_NOTIFICATION_SEND_URL, REMOTE_NOTIFICATION_TIMEOUT_SECONDS
+
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = (1, 2, 4)
+logger = logging.getLogger(__name__)
+
+
+class TemporaryNotificationSenderError(Exception):
+    pass
 
 class NotificationSender:
     def __init__(self, remote_url: str | None = None):
@@ -36,16 +47,34 @@ class NotificationSender:
             }
         ]
 
-        response = requests.post(
-            self.remote_url,
-            json=payload,
-            timeout=REMOTE_NOTIFICATION_TIMEOUT_SECONDS,
-        )
-
-        if not response.ok:
-            raise ValueError(
-            f"Remote API error {response.status_code}: "
-            f"{response.text}")
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = requests.post(
+                    self.remote_url,
+                    json=payload,
+                    timeout=REMOTE_NOTIFICATION_TIMEOUT_SECONDS,
+                )
+                if not response.ok:
+                    if response.status_code == 429 or response.status_code >= 500:
+                        raise TemporaryNotificationSenderError(
+                            f"Remote API error {response.status_code}: {response.text}"
+                        )
+                    raise ValueError(
+                        f"Remote API error {response.status_code}: {response.text}"
+                    )
+                break
+            except (requests.Timeout, requests.ConnectionError, TemporaryNotificationSenderError) as error:
+                if attempt == MAX_RETRIES:
+                    raise
+                delay = RETRY_BACKOFF_SECONDS[attempt]
+                logger.warning(
+                    "Temporary notification sender error; retrying in %ss (attempt %s/%s): %s",
+                    delay,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    error,
+                )
+                time.sleep(delay)
 
         try:
             response_body = response.json()

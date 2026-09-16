@@ -1,4 +1,8 @@
-NOTIFICATION_TYPES = {"video": "video_recommendation", "engagement": "clan_engagement", "sentiment": "sentiment"}
+NOTIFICATION_TYPES = {
+    "video": "VIDEO_RECOMMENDATION",
+    "engagement": "SENTIMENT_ENGAGEMENT",
+    "sentiment": "SENTIMENT_QA",
+}
 VIDEO_POPUP = {"video": "Y", "engagement": "N", "sentiment": "N"}
 NOTIFICATION_CYCLE = {
     1: "VIDEO_RECOMMENDATION",

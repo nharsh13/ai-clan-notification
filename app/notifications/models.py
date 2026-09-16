@@ -3,20 +3,12 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-CampaignDay = Literal[
-    2,
-    22, 23, 24, 25, 26, 27, 28, 29, 30,
-    31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-    41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51
-]
-
 FlowName = Literal["performance", "engagement", "sentiment"]
 
 
 class NotificationSendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    campaign_day: int
     user_id: int
 
 
@@ -34,13 +26,11 @@ class NotificationRequest(BaseModel):
     deep_link: Optional[str] = None
     should_send: bool = True
     video_popup: Optional[str] = None
-    campaign_day: Optional[CampaignDay] = None
 
 
 class Notification(BaseModel):
     user_id: int
     flow: FlowName = "performance"
-    campaign_day: Optional[CampaignDay] = None
 
     notification_title: str = Field(max_length=140)
     notification_body: str = Field(max_length=500)
@@ -63,7 +53,6 @@ class Notification(BaseModel):
 class NotificationResponse(BaseModel):
     user_id: int
     flow: FlowName = "performance"
-    campaign_day: Optional[CampaignDay] = None
     notification_title: str = Field(max_length=140)
     notification_body: str = Field(max_length=500)
 

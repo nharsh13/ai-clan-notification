@@ -1,10 +1,47 @@
 import json
+import logging
+import time
+from typing import Any
 
-from openai import OpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 
 from app.config import OPENAI_API_KEY, OPENAI_MODEL
 
 MODEL = OPENAI_MODEL
+MAX_RETRIES = 3
+RETRY_BACKOFF_SECONDS = (1, 2, 4)
+logger = logging.getLogger(__name__)
+
+
+def _is_temporary_openai_error(error: Exception) -> bool:
+    if isinstance(error, (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)):
+        return True
+    return isinstance(error, APIStatusError) and error.status_code >= 500
+
+
+def _generate_with_retry(client, model: str, prompt: str) -> Any:
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return client.responses.create(model=model, input=prompt)
+        except Exception as error:
+            if not _is_temporary_openai_error(error) or attempt == MAX_RETRIES:
+                raise
+            delay = RETRY_BACKOFF_SECONDS[attempt]
+            logger.warning(
+                "Temporary OpenAI error; retrying in %ss (attempt %s/%s): %s",
+                delay,
+                attempt + 1,
+                MAX_RETRIES,
+                error,
+            )
+            time.sleep(delay)
 
 
 def build_performance_notification_prompt(
@@ -110,10 +147,7 @@ def generate_notification_2(
         prepared_qa=prepared_qa,
     )
 
-    response = client.responses.create(
-        model=MODEL,
-        input=prompt,
-    )
+    response = _generate_with_retry(client, MODEL, prompt)
 
     content = response.output_text.strip()
 
@@ -261,10 +295,7 @@ def generate_notification_1(
         response_data=response_data,
     )
 
-    response = client.responses.create(
-        model=MODEL,
-        input=prompt,
-    )
+    response = _generate_with_retry(client, MODEL, prompt)
 
     content = response.output_text.strip()
 
@@ -374,6 +405,6 @@ class NotificationGenerator:
 
     def generate(self, prompt: str) -> dict[str, str]:
         client = self.client or _get_openai_client()
-        response = client.responses.create(model=self.model, input=prompt)
+        response = _generate_with_retry(client, self.model, prompt)
         return self.validate(response.output_text)
     

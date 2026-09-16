@@ -10,11 +10,10 @@ client = TestClient(app)
 def test_performance_send_matches_contract_and_forwards_selected_video(monkeypatch):
     def build_notification(request):
         assert request.user_id == 953
-        assert request.campaign_day == 2
         return NotificationResponse(
             user_id=953,
             flow="performance",
-            campaign_day=2,
+            notification_type="VIDEO_RECOMMENDATION",
             action="Watch now",
             audience_strategy="dynamic",
             cohort_key="ai_clan",
@@ -22,7 +21,6 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
             deep_link="/videos/55",
             notification_body="Keep building your communication skills.",
             notification_title="Ava, watch this next",
-            notification_type="video_recommendation",
             should_send=True,
             video_id=55,
             video_title="Communicate clearly",
@@ -33,7 +31,7 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
                 "remote_url": "REMOTE_NOTIFICATION_SEND_URL",
                 "request_payload": [{
                     "description": "Keep building your communication skills.",
-                    "notification_type": "video_recommendation",
+                    "notification_type": "VIDEO_RECOMMENDATION",
                     "reference_id": 55,
                     "title": "Ava, watch this next",
                     "user_id": 953,
@@ -45,7 +43,7 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
         )
 
     monkeypatch.setattr(service, "build_notification", build_notification)
-    response = client.post("/notification/send", json={"campaign_day": 2, "user_id": 953})
+    response = client.post("/notification/send", json={"user_id": 953})
 
     assert response.status_code == 200
     result = response.json()
@@ -54,7 +52,6 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
     assert set(result["notification"]) == {
         "action",
         "audience_strategy",
-        "campaign_day",
         "cohort_key",
         "creator_name",
         "deep_link",
@@ -69,6 +66,7 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
     }
     assert result["notification"]["video_title"] == "Communicate clearly"
     assert result["remote_send_response"]["request_payload"][0]["user_id"] == 953
+    assert result["notification"]["notification_type"] == "VIDEO_RECOMMENDATION"
 
 
 def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
@@ -86,7 +84,7 @@ def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
         ),
     )
 
-    response = client.post("/notification/send", json={"campaign_day": 2, "user_id": 953})
+    response = client.post("/notification/send", json={"user_id": 953})
 
     assert response.status_code == 502
     assert response.json()["detail"] == "Remote API error 503"
@@ -175,7 +173,7 @@ def test_sentiment_endpoint_is_read_only(monkeypatch):
 def test_send_rejects_internal_notification_fields():
     response = client.post(
         "/notification/send",
-        json={"campaign_day": 2, "user_id": 953, "flow": "sentiment"},
+        json={"user_id": 953, "flow": "sentiment"},
     )
 
     assert response.status_code == 422

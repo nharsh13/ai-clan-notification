@@ -48,7 +48,6 @@ def send_notification(request: NotificationSendRequest):
     try:
         pipeline_request = NotificationRequest(
             user_id=request.user_id,
-            campaign_day=request.campaign_day,
             flow="performance",
         )
         result = service.build_notification(pipeline_request)
@@ -60,7 +59,6 @@ def send_notification(request: NotificationSendRequest):
         notification = {
             "action": result.action,
             "audience_strategy": result.audience_strategy,
-            "campaign_day": result.campaign_day,
             "cohort_key": result.cohort_key,
             "creator_name": result.creator_name,
             "deep_link": result.deep_link,

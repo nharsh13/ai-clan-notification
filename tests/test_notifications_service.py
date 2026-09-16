@@ -77,7 +77,42 @@ def test_build_notification_engagement_flow(monkeypatch):
     result = service.build_notification(NotificationRequest(user_id=953, flow="engagement", should_send=False))
 
     assert result.flow == "engagement"
+    assert result.notification_type == "SENTIMENT_ENGAGEMENT"
     assert result.notification_title == "Growth Check"
+
+
+def test_build_notification_uses_exact_uppercase_scheduler_event_types(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "en",
+        "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {
+        "video_id": 55, "title": "Focus better",
+    })
+    service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
+
+    video_result = service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
+    assert video_result.notification_type == "VIDEO_RECOMMENDATION"
+
+    monkeypatch.setattr(service_module, "get_user_response_rate", lambda user_id: {
+        "user_id": user_id,
+        "questions_sent": 10,
+        "questions_answered": 6,
+        "response_percentage": 60.0,
+        "notification_type": "POSITIVE",
+    })
+    engagement_result = service.build_notification(NotificationRequest(user_id=953, flow="engagement", should_send=False))
+    assert engagement_result.notification_type == "SENTIMENT_ENGAGEMENT"
+
+    import app.sentiment.sentiment as sentiment_module
+
+    monkeypatch.setattr(sentiment_module, "prepare_user_qa", lambda user_id: {"user_id": user_id, "questions": [{"question_id": 1, "responses": [{"question": "How is work going?", "answer": "Well"}]}]})
+    sentiment_result = service.build_notification(NotificationRequest(user_id=953, flow="sentiment", should_send=False))
+    assert sentiment_result.notification_type == "SENTIMENT_QA"
 
 
 def test_get_performance_contract(monkeypatch):
