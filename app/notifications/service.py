@@ -106,7 +106,10 @@ class NotificationService:
             )
         return self.generator.generate(prompt)
 
-    def _build_flow_context(self, request: NotificationRequest) -> tuple[str, dict[str, Any]]:
+    def _build_flow_context(
+        self,
+        request: NotificationRequest,
+    ) -> tuple[str, dict[str, Any]] | None:
         profile = self._get_user_profile(
             request.user_id,
             require_video_language=request.flow == "performance",
@@ -115,9 +118,11 @@ class NotificationService:
         language = str(profile["app_language_code"]).strip()
         if request.flow == "engagement":
             response_data = get_user_response_rate(request.user_id)
+            if not response_data or response_data["questions_sent"] == 0:
+                return None
             return user_name, {
                 "language": language,
-                "response_data": response_data or {"questions_sent": 0, "questions_answered": 0, "response_percentage": 0, "notification_type": "IMPROVEMENT"},
+                "response_data": response_data,
                 "context": "your CLAN participation",
             }
         if request.flow == "sentiment":
@@ -265,7 +270,10 @@ class NotificationService:
         else:
             notification_type = "VIDEO_RECOMMENDATION"
 
-        user_name, payload = self._build_flow_context(request)
+        flow_context = self._build_flow_context(request)
+        if flow_context is None:
+            return None
+        user_name, payload = flow_context
         if request.flow == "sentiment" and not payload["history_records"]:
             return None
         notification_data = self._generate_llm_notification(request.flow, user_name, payload)

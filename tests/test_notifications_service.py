@@ -81,6 +81,53 @@ def test_build_notification_engagement_flow(monkeypatch):
     assert result.notification_title == "Growth Check"
 
 
+def test_build_notification_engagement_skips_zero_questions(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Nia",
+        "app_language_code": "en",
+        "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "get_user_response_rate", lambda user_id: None)
+    sender = DummySender()
+    generator = DummyGenerator()
+
+    result = service_module.NotificationService(
+        sender=sender,
+        generator=generator,
+    ).build_notification(
+        NotificationRequest(user_id=953, flow="engagement")
+    )
+
+    assert result is None
+    assert generator.prompts == []
+    assert sender.calls == []
+
+
+def test_build_notification_engagement_keeps_positive_threshold(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Nia",
+        "app_language_code": "en",
+        "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "get_user_response_rate", lambda user_id: {
+        "user_id": user_id,
+        "questions_sent": 10,
+        "questions_answered": 6,
+        "response_percentage": 60.0,
+        "notification_type": "POSITIVE",
+    })
+
+    result = service_module.NotificationService(
+        sender=DummySender(),
+        generator=DummyGenerator(),
+    ).build_notification(
+        NotificationRequest(user_id=953, flow="engagement", should_send=False)
+    )
+
+    assert result is not None
+    assert result.notification_type == "SENTIMENT_ENGAGEMENT"
+
+
 def test_build_notification_uses_exact_uppercase_scheduler_event_types(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava",
