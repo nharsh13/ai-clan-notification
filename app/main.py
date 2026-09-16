@@ -3,7 +3,11 @@ from fastapi import FastAPI, HTTPException, Query
 import logging
 
 from app.config import ConfigurationError, validate_configuration
-from app.notifications.models import NotificationRequest, NotificationSendRequest
+from app.notifications.models import (
+    NotificationRequest,
+    NotificationResponse,
+    NotificationSendRequest,
+)
 from app.notifications.sender import NotificationSender
 from app.notifications.service import NotificationService
 
@@ -56,25 +60,18 @@ def send_notification(request: NotificationSendRequest):
         if pipeline_request.should_send and result.remote_send_status == "skipped":
             raise HTTPException(status_code=502, detail=result.error or "Remote notification sender is unavailable")
 
-        notification = {
-            "action": result.action,
-            "audience_strategy": result.audience_strategy,
-            "cohort_key": result.cohort_key,
-            "creator_name": result.creator_name,
-            "deep_link": result.deep_link,
-            "notification_body": result.notification_body,
-            "notification_title": result.notification_title,
-            "notification_type": result.notification_type,
-            "reference_id": result.reference_id,
-            "should_send": result.should_send,
-            "video_id": result.video_id,
-            "video_popup": result.video_popup,
-            "video_title": result.video_title,
-        }
+        notification = NotificationResponse(
+            user_id=result.user_id,
+            title=result.notification_title,
+            description=result.notification_body,
+            notification_type=result.notification_type or "VIDEO_RECOMMENDATION",
+            reference_id=int(result.reference_id or 0),
+            video_popup=result.video_popup,
+            image=None,
+        )
+        notification_data = notification.model_dump()
         return {
-            "notification": notification,
-            "remote_send_response": result.remote_send_response,
-            "remote_send_status": result.remote_send_status or "skipped",
+            "notification": notification_data,
             "success": not pipeline_request.should_send or result.remote_send_status == "sent",
             "user_id": request.user_id,
         }

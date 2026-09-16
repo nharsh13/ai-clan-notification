@@ -55,7 +55,7 @@ def test_build_notification_performance_flow(monkeypatch):
     assert result.video_title == "Focus on clarity"
     assert result.reference_id == 55
     assert result.deep_link == "/videos/55"
-    assert result.video_popup == "Y"
+    assert result.video_popup is True
     assert captured == {"kii_name": "KII 117", "language_id": [1], "embedding": service_module.embed_text}
 
 
@@ -215,7 +215,7 @@ def test_sender_receives_selected_video_reference(monkeypatch):
         "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
     })
     monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {
-        "video_id": 55, "title": "Focus better",
+        "video_id": 363, "title": "Focus better",
     })
     sender = DummySender()
     service = service_module.NotificationService(sender=sender, generator=DummyGenerator())
@@ -225,8 +225,10 @@ def test_sender_receives_selected_video_reference(monkeypatch):
     )
 
     assert result.remote_send_status == "sent"
-    assert sender.calls[0]["reference_id"] == 55
-    assert sender.calls[0]["video_popup"] == "Y"
+    assert result.reference_id == 363
+    assert result.deep_link == "/videos/363"
+    assert sender.calls[0]["reference_id"] == 363
+    assert sender.calls[0]["video_popup"] is True
 
 
 def test_app_language_reaches_llm_but_video_languages_reach_recommender(monkeypatch):
@@ -279,3 +281,127 @@ def test_performance_flow_normalizes_numeric_creator_identifier(monkeypatch):
     )
 
     assert result.creator_name == "1877"
+
+
+def _eligible_sentiment_rows():
+    return [
+        {
+            "response_id": 11,
+            "user_id": 953,
+            "question_id": 1,
+            "question": "How do you respond to feedback?",
+            "answer_id": 3,
+            "answer": "I listen and improve.",
+        },
+        {
+            "response_id": 12,
+            "user_id": 953,
+            "question_id": 2,
+            "question": "How do you handle change?",
+            "answer_id": 5,
+            "answer": "I adapt and communicate.",
+        },
+    ]
+
+
+def _configure_sentiment_service(monkeypatch, sender, generator):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "en",
+        "video_language_ids": [1],
+    })
+    rows = _eligible_sentiment_rows()
+    monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: rows)
+    monkeypatch.setattr(
+        service_module,
+        "prepare_user_qa",
+        lambda user_id, db_engine=None, rows=None: {
+            "user_id": user_id,
+            "questions": [
+                {
+                    "question_id": row["question_id"],
+                    "responses": [{"question": row["question"], "answer": row["answer"]}],
+                }
+                for row in rows
+            ],
+        },
+    )
+    return service_module.NotificationService(sender=sender, generator=generator)
+
+
+def test_sentiment_saves_all_eligible_history_after_successful_send(monkeypatch):
+    saved = []
+    monkeypatch.setattr(
+        service_module,
+        "save_sentiment_notification_history",
+        lambda records, db_engine: saved.extend(records),
+    )
+    service = _configure_sentiment_service(monkeypatch, DummySender(), DummyGenerator())
+
+    result = service.build_notification(NotificationRequest(user_id=953, flow="sentiment"))
+
+    assert result.notification_type == "SENTIMENT_QA"
+    assert [row["response_id"] for row in saved] == [11, 12]
+    assert [row["question_id"] for row in saved] == [1, 2]
+    assert [row["answer_id"] for row in saved] == [3, 5]
+
+
+def test_sentiment_with_no_eligible_qa_skips_llm_and_sender(monkeypatch):
+    generator = DummyGenerator()
+    sender = DummySender()
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: [])
+
+    result = service_module.NotificationService(sender=sender, generator=generator).build_notification(
+        NotificationRequest(user_id=953, flow="sentiment")
+    )
+
+    assert result is None
+    assert generator.prompts == []
+    assert sender.calls == []
+
+
+def test_sentiment_llm_failure_does_not_save_history(monkeypatch):
+    saved = []
+    monkeypatch.setattr(service_module, "save_sentiment_notification_history", saved.extend)
+
+    class FailingGenerator:
+        def generate(self, prompt):
+            raise RuntimeError("LLM unavailable")
+
+    service = _configure_sentiment_service(monkeypatch, DummySender(), FailingGenerator())
+
+    import pytest
+    with pytest.raises(RuntimeError, match="LLM unavailable"):
+        service.build_notification(NotificationRequest(user_id=953, flow="sentiment"))
+    assert saved == []
+
+
+def test_sentiment_send_failure_does_not_save_history(monkeypatch):
+    saved = []
+    monkeypatch.setattr(service_module, "save_sentiment_notification_history", saved.extend)
+
+    class FailingSender(DummySender):
+        def send(self, **kwargs):
+            raise RuntimeError("sender unavailable")
+
+    service = _configure_sentiment_service(monkeypatch, FailingSender(), DummyGenerator())
+    result = service.build_notification(NotificationRequest(user_id=953, flow="sentiment"))
+
+    assert result.remote_send_status == "failed"
+    assert saved == []
+
+
+def test_sentiment_history_failure_is_reported_as_failed(monkeypatch):
+    def fail_history(*args, **kwargs):
+        raise RuntimeError("history insert failed")
+
+    monkeypatch.setattr(service_module, "save_sentiment_notification_history", fail_history)
+    service = _configure_sentiment_service(monkeypatch, DummySender(), DummyGenerator())
+
+    result = service.build_notification(NotificationRequest(user_id=953, flow="sentiment"))
+
+    assert result.remote_send_status == "failed"
+    assert result.error == "history insert failed"

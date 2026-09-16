@@ -1,8 +1,103 @@
 from app.sentiment import sentiment as sent
 
 
+class _HistoryResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def mappings(self):
+        return self
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
+class _HistoryConnection:
+    def __init__(self, rows):
+        self.rows = rows
+        self.query = ""
+        self.params = None
+
+    def execute(self, query, params):
+        self.query = str(query)
+        self.params = params
+        return _HistoryResult(self.rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class _HistoryEngine:
+    def __init__(self, rows):
+        self.connection = _HistoryConnection(rows)
+
+    def connect(self):
+        return self.connection
+
+
+def test_eligible_qa_history_check_uses_exact_response_answer_identity():
+    engine = _HistoryEngine([])
+
+    sent.get_eligible_user_qa(953, engine)
+
+    query = engine.connection.query
+    assert "h.user_id = r.user_id" in query
+    assert "h.response_id = r.id" in query
+    assert "h.question_id = r.question_id" in query
+    assert "h.answer_id = r.answer_id" in query
+    assert "h.status = 1" in query
+    assert engine.connection.params == {"user_id": 953}
+
+
+def test_history_save_writes_all_identity_fields_with_status_one():
+    class WriteConnection:
+        def __init__(self):
+            self.query = ""
+            self.params = None
+
+        def execute(self, query, params):
+            self.query = str(query)
+            self.params = params
+
+    class WriteEngine:
+        def __init__(self):
+            self.connection = WriteConnection()
+
+        def begin(self):
+            return self
+
+        def __enter__(self):
+            return self.connection
+
+        def __exit__(self, *args):
+            return False
+
+    engine = WriteEngine()
+    sent.save_sentiment_notification_history(
+        [{
+            "user_id": 953,
+            "response_id": 11,
+            "question_id": 1,
+            "answer_id": 3,
+        }],
+        engine,
+    )
+
+    assert engine.connection.params == [{
+        "user_id": 953,
+        "response_id": 11,
+        "question_id": 1,
+        "answer_id": 3,
+    }]
+    assert "status" in engine.connection.query
+    assert ", 1" in engine.connection.query
+
+
 # ============================================================
-# NOTIFICATION 1 — CLAN ENGAGEMENT / RESPONSE RATE
+# ENGAGEMENT SENTIMENT — CLAN ENGAGEMENT / RESPONSE RATE
 # ============================================================
 
 def test_response_percentage_below_60_is_improvement():
@@ -111,9 +206,9 @@ def test_duplicate_questions_are_counted_once():
     assert response_percentage == 100.0
 
 
-def test_notification_1_improvement_classification():
+def test_engagement_sentiment_improvement_classification():
     """
-    Verify Notification 1 classification.
+    Verify engagement sentiment classification.
     """
 
     response_percentage = 40.0
@@ -127,9 +222,9 @@ def test_notification_1_improvement_classification():
     assert notification_type == "IMPROVEMENT"
 
 
-def test_notification_1_positive_classification():
+def test_engagement_sentiment_positive_classification():
     """
-    Verify Notification 1 classification.
+    Verify engagement sentiment classification.
     """
 
     response_percentage = 80.0
@@ -144,12 +239,12 @@ def test_notification_1_positive_classification():
 
 
 # ============================================================
-# NOTIFICATION 2 — QUESTION + SELECTED ANSWER
+# Q/A SENTIMENT — QUESTION + SELECTED ANSWER
 # ============================================================
 
-def test_notification_2_selected_answer_data():
+def test_qa_sentiment_selected_answer_data():
     """
-    Verify that Notification 2 contains the required
+    Verify that the Q/A sentiment input contains the required
     question + selected answer information.
     """
 
@@ -182,9 +277,9 @@ def test_notification_2_selected_answer_data():
     assert response["recommended_action_to_manager"]
 
 
-def test_notification_2_llm_input_contains_required_fields():
+def test_qa_sentiment_llm_input_contains_required_fields():
     """
-    Verify the information sent to the LLM for Notification 2.
+    Verify the information sent to the LLM for the Q/A sentiment notification.
     """
 
     llm_input = {
@@ -215,7 +310,7 @@ def test_notification_2_llm_input_contains_required_fields():
     assert required_fields.issubset(llm_input.keys())
 
 
-def test_notification_2_different_answers_are_preserved():
+def test_qa_sentiment_different_answers_are_preserved():
     """
     Different answers must remain distinct because the LLM
     should generate different improvement messages based
@@ -238,10 +333,10 @@ def test_notification_2_different_answers_are_preserved():
     assert answer_1["answer_text"] != answer_2["answer_text"]
 
 
-def test_notification_2_multiple_questions_are_collected():
+def test_qa_sentiment_multiple_questions_are_collected():
     """
     Multiple answered questions should be collected together
-    so that one Notification 2 can be generated.
+    so that one Q/A sentiment notification can be generated.
     """
 
     responses = [
@@ -274,9 +369,9 @@ def test_notification_2_multiple_questions_are_collected():
         assert response["answer_text"]
 
 
-def test_notification_2_generates_one_notification_for_multiple_answers():
+def test_qa_sentiment_generates_one_notification_for_multiple_answers():
     """
-    Multiple Q&A responses should result in ONE Notification 2,
+    Multiple Q&A responses should result in ONE Q/A sentiment notification,
     not one notification per question.
     """
 
@@ -292,30 +387,29 @@ def test_notification_2_generates_one_notification_for_multiple_answers():
 
 
 # ============================================================
-# NOTIFICATION 1 AND NOTIFICATION 2 MUST BE INDEPENDENT
+# ENGAGEMENT AND Q/A SENTIMENT MUST BE INDEPENDENT
 # ============================================================
 
-def test_notification_1_and_notification_2_are_independent():
+def test_engagement_and_qa_sentiment_are_independent():
     """
-    Notification 2 must not depend on Notification 1's
-    response percentage.
+    Q/A sentiment must not depend on engagement response percentage.
     """
 
     response_percentage = 20.0
 
-    notification_1_type = (
+    engagement_sentiment_type = (
         "IMPROVEMENT"
         if response_percentage < 60
         else "POSITIVE"
     )
 
-    notification_2_input = {
+    qa_sentiment_input = {
         "question": "How do you respond to feedback?",
         "selected_answer": "I listen and make changes if needed.",
     }
 
-    assert notification_1_type == "IMPROVEMENT"
+    assert engagement_sentiment_type == "IMPROVEMENT"
 
-    # Notification 2 still has its own Q&A data.
-    assert notification_2_input["question"]
-    assert notification_2_input["selected_answer"]
+    # Q/A sentiment still has its own Q&A data.
+    assert qa_sentiment_input["question"]
+    assert qa_sentiment_input["selected_answer"]

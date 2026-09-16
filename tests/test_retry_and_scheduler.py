@@ -107,6 +107,57 @@ def test_sender_retries_temporary_failures_with_expected_backoff(monkeypatch):
     assert sleeps == [1, 2]
 
 
+@pytest.mark.parametrize(
+    "notification_type, video_popup",
+    [
+        ("VIDEO_RECOMMENDATION", "Y"),
+        ("SENTIMENT_ENGAGEMENT", "N"),
+        ("SENTIMENT_QA", False),
+    ],
+)
+def test_sender_payload_uses_only_backend_fields_and_boolean_popup(
+    monkeypatch,
+    notification_type,
+    video_popup,
+):
+    captured = {}
+
+    def post(url, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr("app.notifications.sender.requests.post", post)
+
+    NotificationSender(remote_url="https://example.test").send(
+        user_id=953,
+        notification_type=notification_type,
+        title="A notification",
+        description="Notification details",
+        reference_id=363,
+        video_popup=video_popup,
+    )
+
+    payload = captured["json"]
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    notification = payload[0]
+    assert isinstance(notification, dict)
+    assert set(notification) == {
+        "user_id",
+        "title",
+        "description",
+        "notification_type",
+        "reference_id",
+        "video_popup",
+        "image",
+    }
+    assert notification["notification_type"] == notification_type
+    assert isinstance(notification["video_popup"], bool)
+    assert notification["video_popup"] is (notification_type == "VIDEO_RECOMMENDATION")
+    assert isinstance(notification["reference_id"], int)
+    assert notification["image"] is None
+
+
 def test_sender_does_not_retry_permanent_http_failure(monkeypatch):
     calls = []
     sleeps = []
@@ -232,3 +283,25 @@ def test_scheduler_continues_after_one_user_failure(monkeypatch):
 
     assert processed == [1, 2, 3]
     assert any("pg_advisory_unlock" in query for query in engine.connection.queries)
+
+
+def test_scheduler_skips_sentiment_when_no_eligible_qa(monkeypatch):
+    engine = FakeSchedulerEngine([953])
+    inserted = []
+    requests_seen = []
+
+    class FakeService:
+        def build_notification(self, request):
+            requests_seen.append(request)
+            return None
+
+    monkeypatch.setattr(run_daily, "engine", engine)
+    monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
+    monkeypatch.setattr(run_daily, "get_next_notification_for_user", lambda *args, **kwargs: "SENTIMENT_QA")
+    monkeypatch.setattr(run_daily, "has_notification_for_user_on_date", lambda *args, **kwargs: False)
+    monkeypatch.setattr(run_daily, "insert_notification", lambda **kwargs: inserted.append(kwargs))
+
+    run_daily.main()
+
+    assert requests_seen[0].flow == "sentiment"
+    assert inserted == []

@@ -27,25 +27,30 @@ class NotificationSender:
         user_id: int,
         notification_type: str,
         title: str,
-        description: str,
+        description: str | None,
         reference_id: int,
-        video_popup: str = "N",
+        video_popup: bool | str | None = False,
+        image: str | None = None,
     ) -> Dict[str, Any]:
         if not self.remote_url:
             raise ValueError(
                 "REMOTE_NOTIFICATION_SEND_URL is not configured"
             )
 
-        payload = [
-            {
-                "description": description,
-                "notification_type": notification_type,
-                "reference_id": reference_id,
-                "title": title,
-                "user_id": user_id,
-                "video_popup": video_popup,
-            }
-        ]
+        if isinstance(video_popup, str):
+            video_popup = video_popup.strip().upper() in {"Y", "YES", "TRUE", "1"}
+        else:
+            video_popup = bool(video_popup)
+
+        payload = [{
+            "user_id": user_id,
+            "title": title,
+            "description": description,
+            "notification_type": notification_type,
+            "reference_id": reference_id,
+            "video_popup": video_popup,
+            "image": image,
+        }]
 
         for attempt in range(MAX_RETRIES + 1):
             try:

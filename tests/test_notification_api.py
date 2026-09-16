@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app, service
-from app.notifications.models import NotificationResponse
+from app.notifications.models import NotificationProcessingResult
 
 
 client = TestClient(app)
@@ -10,7 +10,7 @@ client = TestClient(app)
 def test_performance_send_matches_contract_and_forwards_selected_video(monkeypatch):
     def build_notification(request):
         assert request.user_id == 953
-        return NotificationResponse(
+        return NotificationProcessingResult(
             user_id=953,
             flow="performance",
             notification_type="VIDEO_RECOMMENDATION",
@@ -25,7 +25,7 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
             video_id=55,
             video_title="Communicate clearly",
             reference_id=55,
-            video_popup="Y",
+            video_popup=True,
             remote_send_status="sent",
             remote_send_response={
                 "remote_url": "REMOTE_NOTIFICATION_SEND_URL",
@@ -35,7 +35,8 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
                     "reference_id": 55,
                     "title": "Ava, watch this next",
                     "user_id": 953,
-                    "video_popup": "Y",
+                    "video_popup": True,
+                    "image": None,
                 }],
                 "response": {},
                 "status_code": 200,
@@ -47,25 +48,24 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
 
     assert response.status_code == 200
     result = response.json()
+    assert set(result) == {"success", "user_id", "notification"}
     assert result["success"] is True
     assert result["user_id"] == 953
     assert set(result["notification"]) == {
-        "action",
-        "audience_strategy",
-        "cohort_key",
-        "creator_name",
-        "deep_link",
-        "notification_body",
-        "notification_title",
+        "user_id",
+        "title",
+        "description",
         "notification_type",
         "reference_id",
-        "should_send",
-        "video_id",
         "video_popup",
-        "video_title",
+        "image",
     }
-    assert result["notification"]["video_title"] == "Communicate clearly"
-    assert result["remote_send_response"]["request_payload"][0]["user_id"] == 953
+    assert result["notification"]["user_id"] == 953
+    assert result["notification"]["title"] == "Ava, watch this next"
+    assert result["notification"]["description"] == "Keep building your communication skills."
+    assert result["notification"]["reference_id"] == 55
+    assert result["notification"]["video_popup"] is True
+    assert result["notification"]["image"] is None
     assert result["notification"]["notification_type"] == "VIDEO_RECOMMENDATION"
 
 
@@ -73,7 +73,7 @@ def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
     monkeypatch.setattr(
         service,
         "build_notification",
-        lambda request: NotificationResponse(
+        lambda request: NotificationProcessingResult(
             user_id=request.user_id,
             flow="performance",
             notification_title="Title",

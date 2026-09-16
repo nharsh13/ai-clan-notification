@@ -1,4 +1,5 @@
 from sqlalchemy import text
+import pytest
 
 from app.recommendation import recommendation as rec
 from app.database.connection import engine
@@ -35,12 +36,6 @@ def test_embed_text_returns_384_dimensions(monkeypatch):
     Verify that embed_text() returns a 384-dimensional
     embedding when Sentence Transformers is selected.
     """
-
-    monkeypatch.setattr(
-        rec,
-        "_resolve_embedding_provider",
-        lambda: "sentence_transformers",
-    )
 
     monkeypatch.setattr(
         rec,
@@ -81,30 +76,8 @@ def test_sentence_transformers_embedding_path_does_not_use_openai(
 
     monkeypatch.setattr(
         rec,
-        "EMBEDDING_PROVIDER",
-        "sentence_transformers",
-    )
-
-    monkeypatch.setattr(
-        rec,
-        "EMBEDDING_MODEL",
-        "all-MiniLM-L6-v2",
-    )
-
-    monkeypatch.setattr(
-        rec,
         "SentenceTransformer",
         FakeSentenceTransformer,
-    )
-
-    monkeypatch.setattr(
-        rec,
-        "_embed_with_openai",
-        lambda text: (
-            (_ for _ in ()).throw(
-                AssertionError("OpenAI was called")
-            )
-        ),
     )
 
     rec._get_sentence_transformer.cache_clear()
@@ -243,6 +216,46 @@ def test_recommend_for_user_uses_weakest_kii_and_video_language(
     assert captured["language_id"] == [2, 5]
     assert captured["embedding_len"] == 384
     assert captured["user_id"] == 953
+
+
+@pytest.mark.parametrize("language_ids", ([3], [9], [23], [3, 9, 23]))
+def test_recommend_for_user_passes_only_user_video_languages(
+    monkeypatch,
+    language_ids,
+):
+    monkeypatch.setattr(
+        rec,
+        "calculate_performance",
+        lambda user_id: {
+            "improvement_area": {
+                "kii_id": 117,
+                "kii_name": "Channel Partner Empanelled",
+                "performance_percentage": 0.0,
+            }
+        },
+    )
+    monkeypatch.setattr(
+        rec,
+        "get_user",
+        lambda user_id, db_engine=None: {
+            "video_language_ids": language_ids,
+        },
+    )
+    monkeypatch.setattr(rec, "embed_text", lambda text: [0.0] * 384)
+    captured = {}
+
+    def fake_search_videos(**kwargs):
+        captured.update(kwargs)
+        return {"video_id": 363, "title": "Channel Partner Approach"}
+
+    monkeypatch.setattr(rec, "search_videos", fake_search_videos)
+
+    result = rec.recommend_for_user(953)
+
+    assert result["video_id"] == 363
+    assert captured["kii_id"] == 117
+    assert captured["language_id"] == language_ids
+    assert len(captured["query_embedding"]) == 384
 
 
 def test_recommend_for_user_returns_none_when_no_match(

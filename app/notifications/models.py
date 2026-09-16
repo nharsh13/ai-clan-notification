@@ -25,7 +25,7 @@ class NotificationRequest(BaseModel):
     creator_name: Optional[str] = None
     deep_link: Optional[str] = None
     should_send: bool = True
-    video_popup: Optional[str] = None
+    video_popup: Optional[bool] = None
 
 
 class Notification(BaseModel):
@@ -47,10 +47,10 @@ class Notification(BaseModel):
     video_id: Optional[int] = None
     video_title: Optional[str] = None
     creator_name: Optional[str] = None
-    video_popup: Optional[str] = None
+    video_popup: Optional[bool] = None
 
 
-class NotificationResponse(BaseModel):
+class NotificationProcessingResult(BaseModel):
     user_id: int
     flow: FlowName = "performance"
     notification_title: str = Field(max_length=140)
@@ -68,7 +68,7 @@ class NotificationResponse(BaseModel):
     video_id: Optional[int] = None
     video_title: Optional[str] = None
     creator_name: Optional[str] = None
-    video_popup: Optional[str] = None
+    video_popup: Optional[bool] = None
 
     error: Optional[str] = None
     remote_send_status: Optional[str] = None
@@ -93,6 +93,16 @@ class NotificationResponse(BaseModel):
             raise ValueError("notification_body cannot be empty")
 
         return text
+
+
+class NotificationResponse(BaseModel):
+    user_id: int
+    title: str
+    description: Optional[str] = None
+    notification_type: str
+    reference_id: int
+    video_popup: Optional[bool] = None
+    image: Optional[str] = None
 
 
 class BatchNotificationRequest(BaseModel):
@@ -121,5 +131,3 @@ class SendNotificationResponse(BaseModel):
     notification: NotificationResponse
 
     error: Optional[str] = None
-    remote_send_status: Optional[str] = None
-    remote_send_response: Optional[dict] = None

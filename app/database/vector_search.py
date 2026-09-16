@@ -253,6 +253,7 @@ def search_videos(
         JOIN public.content_embeddings ce ON ce.content_id = c.id
         WHERE kr.kii_id = :kii_id AND kr.status = 1
           {language_filter}
+                    AND ce.embedding IS NOT NULL
           AND (
               :user_id IS NULL
               OR NOT EXISTS (

@@ -54,6 +54,8 @@ def main() -> None:
                 flow = FLOW_BY_EVENT_TYPE[event_type]
                 try:
                     result = service.build_notification(NotificationRequest(user_id=user_id, flow=flow))
+                    if result is None:
+                        continue
                     if result.remote_send_status == "failed":
                         logging.getLogger(__name__).error("Notification failed for user=%s flow=%s", user_id, flow)
                         continue

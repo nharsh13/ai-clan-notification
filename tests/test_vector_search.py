@@ -16,8 +16,10 @@ class FakeConnection:
 	def __init__(self, history, candidates):
 		self.history = history
 		self.candidates = candidates
+		self.query = None
 
 	def execute(self, query, params):
+		self.query = str(query)
 		eligible = [
 			candidate
 			for candidate in self.candidates
@@ -64,6 +66,19 @@ def test_search_videos_excludes_fully_watched_video():
 	)
 
 	assert result["video_id"] == 456
+
+
+def test_search_videos_requires_non_null_embedding():
+	connection = FakeConnection([], [{"video_id": 123}])
+	vector_search.search_videos(
+		kii_id=121,
+		language_id=2,
+		query_embedding=[0.0] * 384,
+		db_engine=FakeEngine(connection),
+		user_id=953,
+	)
+
+	assert "ce.embedding IS NOT NULL" in connection.query
 
 
 def test_search_videos_keeps_partially_watched_video_eligible():

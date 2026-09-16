@@ -6,30 +6,11 @@ from typing import Any, Callable
 from app.database.connection import engine
 from app.database.user_repository import get_user
 from app.database.vector_search import search_videos
-from app.config import EMBEDDING_API_KEY, EMBEDDING_MODEL, EMBEDDING_PROVIDER
 from app.performance.performance import calculate_performance
 from sentence_transformers import SentenceTransformer
+
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIMENSIONS = 384
-
-
-def _resolve_embedding_provider() -> str:
-    return EMBEDDING_PROVIDER
-
-
-def _embed_with_openai(text: str) -> list[float]:
-    from openai import OpenAI
-
-    if not EMBEDDING_API_KEY:
-        raise ValueError(
-            "Missing required environment variable: EMBEDDING_API_KEY or OPENAI_API_KEY"
-        )
-    client = OpenAI(api_key=EMBEDDING_API_KEY)
-    response = client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=text,
-    )
-    embedding = response.data[0].embedding
-    return [float(value) for value in embedding]
 
 
 def _embed_with_sentence_transformers(text: str) -> list[float]:
@@ -44,17 +25,7 @@ def _get_sentence_transformer() -> SentenceTransformer:
 
 
 def embed_text(text: str) -> list[float]:
-    provider = _resolve_embedding_provider()
-
-    if provider == "openai":
-        embedding = _embed_with_openai(text)
-    elif provider == "sentence_transformers":
-        embedding = _embed_with_sentence_transformers(text)
-    else:
-        raise ValueError(
-            "Unsupported embedding provider. Set EMBEDDING_PROVIDER to "
-            "openai or sentence_transformers."
-        )
+    embedding = _embed_with_sentence_transformers(text)
 
     if len(embedding) != EMBEDDING_DIMENSIONS:
         raise ValueError(

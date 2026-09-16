@@ -29,7 +29,7 @@ class NotificationEngine:
         creator_name: str | None = None,
         action: str = "Watch now",
         should_send: bool = True,
-        video_popup: str | None = None,
+        video_popup: bool | None = None,
     ) -> Notification:
         normalized_flow = self._normalize_flow(flow)
         return Notification(

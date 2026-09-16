@@ -33,10 +33,10 @@ class FakeOpenAIClient:
 
 
 # ============================================================
-# NOTIFICATION 1 — IMPROVEMENT
+# ENGAGEMENT SENTIMENT — IMPROVEMENT
 # ============================================================
 
-def test_generate_notification_1_improvement(monkeypatch):
+def test_generate_engagement_sentiment_notification_improvement(monkeypatch):
     """
     Response percentage < 60%
     Expected notification type: IMPROVEMENT
@@ -67,7 +67,7 @@ def test_generate_notification_1_improvement(monkeypatch):
         "notification_type": "IMPROVEMENT",
     }
 
-    result = llm.generate_notification_1(
+    result = llm.generate_engagement_sentiment_notification(
         user_name="Rahul",
         language="English",
         response_data=response_data,
@@ -101,10 +101,10 @@ def test_generate_notification_1_improvement(monkeypatch):
 
 
 # ============================================================
-# NOTIFICATION 1 — POSITIVE
+# ENGAGEMENT SENTIMENT — POSITIVE
 # ============================================================
 
-def test_generate_notification_1_positive(monkeypatch):
+def test_generate_engagement_sentiment_notification_positive(monkeypatch):
     """
     Response percentage >= 60%
     Expected notification type: POSITIVE
@@ -135,7 +135,7 @@ def test_generate_notification_1_positive(monkeypatch):
         "notification_type": "POSITIVE",
     }
 
-    result = llm.generate_notification_1(
+    result = llm.generate_engagement_sentiment_notification(
         user_name="Amit",
         language="English",
         response_data=response_data,
@@ -166,16 +166,16 @@ def test_generate_notification_1_positive(monkeypatch):
 
 
 # ============================================================
-# NOTIFICATION 1 — NO DATA
+# ENGAGEMENT SENTIMENT — NO DATA
 # ============================================================
 
-def test_generate_notification_1_returns_none_without_data():
+def test_generate_engagement_sentiment_notification_returns_none_without_data():
     """
-    If response_data is empty, Notification 1 should not
+    If response_data is empty, the engagement notification should not
     call the LLM and should return None.
     """
 
-    result = llm.generate_notification_1(
+    result = llm.generate_engagement_sentiment_notification(
         user_name="Rahul",
         language="English",
         response_data={},
@@ -185,12 +185,12 @@ def test_generate_notification_1_returns_none_without_data():
 
 
 # ============================================================
-# NOTIFICATION 2
+# Q/A SENTIMENT
 # ============================================================
 
-def test_generate_notification_2(monkeypatch):
+def test_generate_qa_sentiment_notification(monkeypatch):
     """
-    Verify Notification 2:
+    Verify Q/A sentiment notification:
 
     Question + selected answer + context
                     ↓
@@ -234,7 +234,7 @@ def test_generate_notification_2(monkeypatch):
         ]
     }
 
-    result = llm.generate_notification_2(
+    result = llm.generate_qa_sentiment_notification(
         user_name="Rahul",
         language="English",
         prepared_qa=prepared_qa,
@@ -267,12 +267,12 @@ def test_generate_notification_2(monkeypatch):
 
 
 # ============================================================
-# NOTIFICATION 1 PROMPT
+# ENGAGEMENT SENTIMENT PROMPT
 # ============================================================
 
-def test_notification_1_prompt_contains_required_data():
+def test_engagement_sentiment_prompt_contains_required_data():
     """
-    Verify Notification 1 prompt contains the backend-calculated
+    Verify the engagement sentiment prompt contains the backend-calculated
     engagement data.
     """
 
@@ -283,7 +283,7 @@ def test_notification_1_prompt_contains_required_data():
         "notification_type": "IMPROVEMENT",
     }
 
-    prompt = llm.build_notification_1_prompt(
+    prompt = llm.build_engagement_sentiment_notification_prompt(
         user_name="Rahul",
         language="English",
         response_data=response_data,
@@ -299,17 +299,17 @@ def test_notification_1_prompt_contains_required_data():
     assert "40" in prompt
     assert "IMPROVEMENT" in prompt
 
-    # Notification 1 should not depend on individual Q&A
+    # Engagement sentiment should not depend on individual Q&A
     assert "selected_answer" not in prompt
 
 
 # ============================================================
-# NOTIFICATION 2 PROMPT
+# Q/A SENTIMENT PROMPT
 # ============================================================
 
-def test_notification_2_prompt_contains_user_and_qa():
+def test_qa_sentiment_prompt_contains_user_and_qa():
     """
-    Verify Notification 2 prompt contains user, language,
+    Verify the Q/A sentiment prompt contains user, language,
     and prepared Q&A data.
     """
 
@@ -324,7 +324,7 @@ def test_notification_2_prompt_contains_user_and_qa():
         ]
     }
 
-    prompt = llm.build_notification_2_prompt(
+    prompt = llm.build_qa_sentiment_notification_prompt(
         user_name="Rahul",
         language="English",
         prepared_qa=prepared_qa,
@@ -340,12 +340,12 @@ def test_notification_2_prompt_contains_user_and_qa():
 
 
 # ============================================================
-# VALIDATE NOTIFICATION 1
+# VALIDATE ENGAGEMENT SENTIMENT
 # ============================================================
 
-def test_validate_notification_1_accepts_valid_output():
+def test_validate_engagement_sentiment_notification_accepts_valid_output():
     """
-    Valid Notification 1 output should pass validation.
+    Valid engagement sentiment output should pass validation.
     """
 
     notification = {
@@ -353,12 +353,12 @@ def test_validate_notification_1_accepts_valid_output():
         "description": "Continue engaging with CLAN.",
     }
 
-    result = llm.validate_notification_1(notification)
+    result = llm.validate_engagement_sentiment_notification(notification)
 
     assert result is None
 
 
-def test_validate_notification_1_rejects_missing_title():
+def test_validate_engagement_sentiment_notification_rejects_missing_title():
     """
     Missing title should raise ValueError.
     """
@@ -371,10 +371,10 @@ def test_validate_notification_1_rejects_missing_title():
         ValueError,
         match="title is missing",
     ):
-        llm.validate_notification_1(notification)
+        llm.validate_engagement_sentiment_notification(notification)
 
 
-def test_validate_notification_1_rejects_missing_description():
+def test_validate_engagement_sentiment_notification_rejects_missing_description():
     """
     Missing description should raise ValueError.
     """
@@ -387,10 +387,10 @@ def test_validate_notification_1_rejects_missing_description():
         ValueError,
         match="description is missing",
     ):
-        llm.validate_notification_1(notification)
+        llm.validate_engagement_sentiment_notification(notification)
 
 
-def test_validate_notification_1_rejects_empty_title():
+def test_validate_engagement_sentiment_notification_rejects_empty_title():
     """
     Empty title should raise ValueError.
     """
@@ -404,10 +404,10 @@ def test_validate_notification_1_rejects_empty_title():
         ValueError,
         match="title is empty",
     ):
-        llm.validate_notification_1(notification)
+        llm.validate_engagement_sentiment_notification(notification)
 
 
-def test_validate_notification_1_rejects_empty_description():
+def test_validate_engagement_sentiment_notification_rejects_empty_description():
     """
     Empty description should raise ValueError.
     """
@@ -421,16 +421,16 @@ def test_validate_notification_1_rejects_empty_description():
         ValueError,
         match="description is empty",
     ):
-        llm.validate_notification_1(notification)
+        llm.validate_engagement_sentiment_notification(notification)
 
 
 # ============================================================
-# VALIDATE NOTIFICATION 2
+# VALIDATE Q/A SENTIMENT
 # ============================================================
 
-def test_validate_notification_2_accepts_valid_output():
+def test_validate_qa_sentiment_notification_accepts_valid_output():
     """
-    Valid Notification 2 output should pass validation.
+    Valid Q/A sentiment output should pass validation.
     """
 
     notification = {
@@ -440,12 +440,12 @@ def test_validate_notification_2_accepts_valid_output():
         ),
     }
 
-    result = llm.validate_notification_2(notification)
+    result = llm.validate_qa_sentiment_notification(notification)
 
     assert result is None
 
 
-def test_validate_notification_2_rejects_missing_title():
+def test_validate_qa_sentiment_notification_rejects_missing_title():
     """
     Missing title should raise ValueError.
     """
@@ -458,10 +458,10 @@ def test_validate_notification_2_rejects_missing_title():
         ValueError,
         match="title is missing",
     ):
-        llm.validate_notification_2(notification)
+        llm.validate_qa_sentiment_notification(notification)
 
 
-def test_validate_notification_2_rejects_missing_description():
+def test_validate_qa_sentiment_notification_rejects_missing_description():
     """
     Missing description should raise ValueError.
     """
@@ -474,7 +474,7 @@ def test_validate_notification_2_rejects_missing_description():
         ValueError,
         match="description is missing",
     ):
-        llm.validate_notification_2(notification)
+        llm.validate_qa_sentiment_notification(notification)
 
 
 # ============================================================
@@ -500,7 +500,7 @@ def test_invalid_llm_json_raises_error(monkeypatch):
         ValueError,
         match="invalid JSON",
     ):
-        llm.generate_notification_1(
+        llm.generate_engagement_sentiment_notification(
             user_name="Rahul",
             language="English",
             response_data={
@@ -547,8 +547,8 @@ def test_different_answers_generate_different_prompts(
             )()
 
     # This test verifies prompt-building directly because
-    # generate_notification_2 uses client.responses.create().
-    prompt_1 = llm.build_notification_2_prompt(
+    # generate_qa_sentiment_notification uses client.responses.create().
+    prompt_1 = llm.build_qa_sentiment_notification_prompt(
         user_name="Rahul",
         language="English",
         prepared_qa={
@@ -563,7 +563,7 @@ def test_different_answers_generate_different_prompts(
         },
     )
 
-    prompt_2 = llm.build_notification_2_prompt(
+    prompt_2 = llm.build_qa_sentiment_notification_prompt(
         user_name="Rahul",
         language="English",
         prepared_qa={
