@@ -215,43 +215,6 @@ class NotificationService:
         ]
         return {"user_id": user_id, "responses": responses}
 
-    def process_sentiment_notification(self, user_id: int) -> dict[str, Any]:
-        selected_question = get_next_sentiment_response(user_id, self.db_engine)
-        if selected_question is None:
-            return {"user_id": user_id, "notification": None}
-
-        responses = selected_question.get("responses", [selected_question])
-        result = {
-            "user_id": user_id,
-            "notification": {
-                "response_id": selected_question["response_id"],
-                "question_id": selected_question["question_id"],
-                "answer_id": selected_question["answer_id"],
-                "question": selected_question["question"],
-                "answer": "\n".join(response["answer"] for response in responses),
-                "responses": responses,
-            },
-        }
-
-        if self.sender.remote_url:
-            remote_response = self.sender.send(
-                user_id=user_id,
-                notification_type="SENTIMENT_QA",
-                title=selected_question["question"],
-                description="\n".join(response["answer"] for response in responses),
-                reference_id=int(selected_question["response_id"]),
-                video_popup=False,
-            )
-            for response in responses:
-                save_sentiment_notification_history(response, self.db_engine)
-            result["remote_send_status"] = "sent"
-            result["remote_send_response"] = remote_response
-        else:
-            result["remote_send_status"] = "skipped"
-            result["error"] = "REMOTE_NOTIFICATION_SEND_URL is not configured"
-
-        return result
-
     def build_notification(
         self,
         request: NotificationRequest,

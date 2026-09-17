@@ -1,3 +1,7 @@
+from typing import cast
+
+from sqlalchemy.engine import Engine
+
 from app.sentiment import sentiment as sent
 
 
@@ -41,7 +45,7 @@ class _HistoryEngine:
 def test_eligible_qa_history_check_uses_exact_response_answer_identity():
     engine = _HistoryEngine([])
 
-    sent.get_eligible_user_qa(953, engine)
+    sent.get_eligible_user_qa(953, cast(Engine, engine))
 
     query = engine.connection.query
     assert "h.user_id = r.user_id" in query
@@ -83,7 +87,7 @@ def test_history_save_writes_all_identity_fields_with_status_one():
             "question_id": 1,
             "answer_id": 3,
         }],
-        engine,
+        cast(Engine, engine),
     )
 
     assert engine.connection.params == [{
