@@ -12,66 +12,83 @@ def build_engagement_sentiment_notification_prompt(
     response_data: dict,
 ) -> str:
     """
-    Build the prompt for the engagement sentiment notification.
-
-    This notification uses only:
-        - user name
-        - questions sent
-        - questions answered
-        - response percentage
-        - notification type
-
-    It does NOT use question or answer text.
+    Build the prompt for one personalized CLAN engagement notification.
     """
 
-    questions_sent = response_data["questions_sent"]
-    questions_answered = response_data["questions_answered"]
-    response_percentage = response_data["response_percentage"]
-    notification_type = response_data["notification_type"]
+    questions_sent = response_data.get("questions_sent", 0)
+    questions_answered = response_data.get("questions_answered", 0)
+    response_percentage = response_data.get("response_percentage", 0)
+    notification_type = response_data.get(
+        "notification_type",
+        "IMPROVEMENT",
+    )
 
     return f"""
 You are generating ONE personalized CLAN engagement notification.
 
-User name:
-{user_name}
+User name: {user_name}
+Notification language: {language}
+Questions sent: {questions_sent}
+Questions answered: {questions_answered}
+Response percentage: {response_percentage}%
+Notification type: {notification_type}
 
-Notification language:
-{language}
+Your goal:
+Create a short, friendly notification that encourages the user to stay engaged with CLAN.
 
-Questions sent:
-{questions_sent}
-
-Questions answered:
-{questions_answered}
-
-Response percentage:
-{response_percentage}%
-
-Notification type:
-{notification_type}
-
-Instructions:
+Rules:
 
 1. Generate EXACTLY ONE notification.
-2. The notification is about CLAN engagement.
-3. Use the response percentage and notification type.
-4. If the type is IMPROVEMENT, encourage the user positively
-   to participate more in CLAN.
-5. If the type is POSITIVE, appreciate their CLAN participation
-   and encourage them to continue.
-6. Never shame or criticize the user.
-7. Do not use negative words such as bad, poor, lazy, or similar wording.
-8. Do not mention individual questions or answers.
-9. The user's name MUST appear in the title.
-10. Keep the title short.
-11. Keep the description concise and actionable.
-12. Generate the notification directly in the requested language.
-13. Return ONLY valid JSON.
+2. Write the notification directly in the requested language.
+3. Use very simple, everyday language.
+4. Write like a mobile app notification.
+5. Keep the title short and interesting.
+6. The title MUST include the user's name.
+7. The title MUST NOT be only "Hello {user_name}".
+8. The title should contain a short motivational phrase.
+9. If notification_type is "IMPROVEMENT":
+   - Encourage the user to participate more in CLAN.
+   - Encourage the user to answer more CLAN questions.
+   - Keep the message positive.
+10. If notification_type is "POSITIVE":
+   - Appreciate the user's CLAN participation.
+   - Encourage the user to continue participating.
+11. Do NOT show the response percentage.
+12. Do NOT show the number of questions sent or answered.
+13. Do NOT mention individual questions.
+14. Do NOT shame, blame, or criticize the user.
+15. Do NOT use words such as:
+   "bad", "poor", "lazy", "weak", "failure",
+   or similar negative words.
+16. Do NOT use difficult, formal, technical, or complicated words.
+17. Do NOT make claims that are not supported by the input.
+18. Keep the description short, clear, and actionable.
+19. The description should tell the user what they can do next.
+20. Return ONLY valid JSON.
+21. Return exactly two fields:
+   "title"
+   "description"
+22. Do NOT return Markdown, explanations, or any extra text.
 
-Return:
+Example for IMPROVEMENT:
+
 {{
-    "title": "Personalized title",
-    "description": "Personalized description"
+    "title": "Hello {user_name}, Let's Participate",
+    "description": "Answer more CLAN questions and keep learning."
+}}
+
+Example for POSITIVE:
+
+{{
+    "title": "Hello {user_name}, Great Work",
+    "description": "Keep taking part in CLAN and continue learning."
+}}
+
+Return ONLY:
+
+{{
+    "title": "string",
+    "description": "string"
 }}
 """
 
@@ -82,9 +99,9 @@ def generate_engagement_sentiment_notification(
     response_data: dict,
 ) -> dict | None:
     """
-    Generate one engagement sentiment notification using the configured LLM.
+    Generate one CLAN engagement notification using the configured LLM.
 
-    Returns None when no questions were sent.
+    Returns None when no response data is available.
     """
 
     if not response_data:
@@ -98,7 +115,11 @@ def generate_engagement_sentiment_notification(
         response_data=response_data,
     )
 
-    response = _generate_with_retry(client, MODEL, prompt)
+    response = _generate_with_retry(
+        client,
+        MODEL,
+        prompt,
+    )
 
     content = response.output_text.strip()
 
@@ -109,7 +130,9 @@ def generate_engagement_sentiment_notification(
     return notification
 
 
-def validate_engagement_sentiment_notification(notification: dict) -> None:
+def validate_engagement_sentiment_notification(
+    notification: dict,
+) -> None:
     """
     Validate the engagement sentiment notification output.
     """
