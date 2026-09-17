@@ -52,9 +52,9 @@ Instructions:
 13. Do NOT use difficult, formal, technical, or complicated words.
 14. The user's name MUST appear in the title.
 15. The title MUST start with "Hello {user_name}".
-16. The title must be short.
+16. The title must be short and meaningful.
 17. Do NOT make the title only "Hello {user_name}".
-18. Add a short motivational or useful phrase after the user's name.
+18. Add a short motivational, encouraging, or useful phrase after the user's name.
 19. Keep the description short and clear.
 20. The description should give ONE simple and useful direction.
 21. Generate the notification directly in the requested language.
@@ -66,11 +66,27 @@ Instructions:
     "description"
 26. Do NOT return Markdown, explanations, or any extra text.
 
+For the title, use a natural and meaningful phrase such as:
+
+- "Hello {user_name}, Keep Learning"
+- "Hello {user_name}, Let's Grow"
+- "Hello {user_name}, Keep Improving"
+- "Hello {user_name}, Learn and Grow"
+- "Hello {user_name}, Take the Next Step"
+- "Hello {user_name}, Keep Moving Forward"
+- "Hello {user_name}, Build Your Skills"
+- "Hello {user_name}, Let's Get Better"
+- "Hello {user_name}, Keep Growing"
+- "Hello {user_name}, Your Next Step"
+
+Choose ONE title that fits the learning area identified from the user's answers.
+Do NOT always use the same title.
+
 Example:
 
 {{
-    "title": "Hello {user_name}, Keep Learning",
-    "description": "Understanding your customers can help you build better relationships. Keep learning and use it in your work."
+    "title": "Hello {user_name}, Take the Next Step",
+    "description": "Keep building your understanding and use what you learn in your work."
 }}
 
 Return ONLY:
