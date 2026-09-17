@@ -104,7 +104,16 @@ class NotificationService:
                 weakest_kii=payload["weakest_kii"],
                 video=payload["video"],
             )
-        return self.generator.generate(prompt)
+        notification_type = {
+            "performance": "VIDEO_RECOMMENDATION",
+            "engagement": "SENTIMENT_ENGAGEMENT",
+            "sentiment": "SENTIMENT_QA",
+        }[flow]
+        return self.generator.generate(
+            prompt,
+            user_id=payload.get("user_id"),
+            notification_type=notification_type,
+        )
 
     def _build_flow_context(
         self,
@@ -121,6 +130,7 @@ class NotificationService:
             if not response_data or response_data["questions_sent"] == 0:
                 return None
             return user_name, {
+                "user_id": request.user_id,
                 "language": language,
                 "response_data": response_data,
                 "context": "your CLAN participation",
@@ -140,6 +150,7 @@ class NotificationService:
                 rows=eligible_responses,
             )
             return user_name, {
+                "user_id": request.user_id,
                 "language": language,
                 "prepared_qa": prepared_qa,
                 "history_records": eligible_responses,
@@ -171,6 +182,7 @@ class NotificationService:
             )
 
         return user_name, {
+            "user_id": request.user_id,
             "language": language,
             "weakest_kii": weakest,
             "video": recommendation,

@@ -12,7 +12,7 @@ from openai import (
     RateLimitError,
 )
 
-from app.config import OPENAI_API_KEY, OPENAI_MODEL
+from app.config import OPENAI_API_KEY, OPENAI_MODEL, OPENAI_TIMEOUT_SECONDS
 
 MODEL = OPENAI_MODEL
 MAX_RETRIES = 3
@@ -26,20 +26,37 @@ def _is_temporary_openai_error(error: Exception) -> bool:
     return isinstance(error, APIStatusError) and error.status_code >= 500
 
 
-def _generate_with_retry(client, model: str, prompt: str) -> Any:
+def _generate_with_retry(
+    client,
+    model: str,
+    prompt: str,
+    *,
+    user_id: int | None = None,
+    notification_type: str | None = None,
+) -> Any:
     for attempt in range(MAX_RETRIES + 1):
         try:
             return client.responses.create(model=model, input=prompt)
         except Exception as error:
             if not _is_temporary_openai_error(error) or attempt == MAX_RETRIES:
+                logger.error(
+                    "OpenAI LLM failed after all retries user_id=%s notification_type=%s model=%s retry_attempt=%s error_type=%s",
+                    user_id,
+                    notification_type,
+                    model,
+                    attempt + 1,
+                    type(error).__name__,
+                )
                 raise
             delay = RETRY_BACKOFF_SECONDS[attempt]
             logger.warning(
-                "Temporary OpenAI error; retrying in %ss (attempt %s/%s): %s",
-                delay,
+                "OpenAI LLM retry user_id=%s notification_type=%s model=%s retry_attempt=%s error_type=%s backoff_seconds=%s",
+                user_id,
+                notification_type,
+                model,
                 attempt + 1,
-                MAX_RETRIES,
-                error,
+                type(error).__name__,
+                delay,
             )
             time.sleep(delay)
 
@@ -55,7 +72,7 @@ def _get_openai_client() -> OpenAI:
             "Add it to the .env file."
         )
 
-    return OpenAI(api_key=OPENAI_API_KEY)
+    return OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT_SECONDS)
 
 
 def _parse_json_response(content: str) -> dict:
@@ -96,7 +113,30 @@ class NotificationGenerator:
             "action": action.strip(),
         }
 
-    def generate(self, prompt: str) -> dict[str, str]:
+    def generate(
+        self,
+        prompt: str,
+        *,
+        user_id: int | None = None,
+        notification_type: str | None = None,
+    ) -> dict[str, str]:
         client = self.client or _get_openai_client()
-        response = _generate_with_retry(client, self.model, prompt)
-        return self.validate(response.output_text)
+        response = _generate_with_retry(
+            client,
+            self.model,
+            prompt,
+            user_id=user_id,
+            notification_type=notification_type,
+        )
+        try:
+            return self.validate(response.output_text)
+        except Exception as error:
+            logger.error(
+                "OpenAI LLM response validation failed user_id=%s notification_type=%s model=%s retry_attempt=%s error_type=%s",
+                user_id,
+                notification_type,
+                self.model,
+                0,
+                type(error).__name__,
+            )
+            raise

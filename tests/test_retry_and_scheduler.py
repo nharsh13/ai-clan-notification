@@ -2,8 +2,10 @@ import json
 
 import pytest
 import requests
+import httpx
+from openai import APITimeoutError
 
-from app.llm import notification_generator as llm
+from app.llm import llm_client as llm
 from app.notifications.sender import NotificationSender
 import scripts.run_daily as run_daily
 
@@ -24,9 +26,11 @@ class FakeOpenAIResponses:
         self.failures = failures
         self.content = content
         self.calls = 0
+        self.kwargs = []
 
     def create(self, **kwargs):
         self.calls += 1
+        self.kwargs.append(kwargs)
         if self.calls <= self.failures:
             raise RuntimeError("temporary OpenAI failure")
         return type("Response", (), {"output_text": self.content})()
@@ -55,6 +59,56 @@ def test_openai_retries_temporary_failures_with_expected_backoff(monkeypatch):
     assert result["title"] == "Title"
     assert client.responses.calls == 4
     assert sleeps == [1, 2, 4]
+
+
+def test_openai_timeout_error_uses_existing_retry_mechanism(monkeypatch):
+    timeout_error = APITimeoutError(request=httpx.Request("POST", "https://api.openai.com"))
+
+    class TimeoutOnceResponses(FakeOpenAIResponses):
+        def create(self, **kwargs):
+            self.calls += 1
+            self.kwargs.append(kwargs)
+            if self.calls == 1:
+                raise timeout_error
+            return type("Response", (), {"output_text": self.content})()
+
+    client = FakeOpenAIClient()
+    client.responses = TimeoutOnceResponses(0, client.responses.content)
+    sleeps = []
+    monkeypatch.setattr(llm.time, "sleep", sleeps.append)
+
+    result = llm.NotificationGenerator(client=client).generate(
+        "prompt",
+        user_id=953,
+        notification_type="SENTIMENT_QA",
+    )
+
+    assert result["title"] == "Title"
+    assert client.responses.calls == 2
+    assert sleeps == [1]
+
+
+def test_openai_final_failure_logs_context_without_sensitive_data(monkeypatch, caplog):
+    client = FakeOpenAIClient(failures=4)
+    monkeypatch.setattr(llm, "_is_temporary_openai_error", lambda error: True)
+    monkeypatch.setattr(llm.time, "sleep", lambda _: None)
+
+    with caplog.at_level("ERROR", logger="app.llm.llm_client"):
+        with pytest.raises(RuntimeError):
+            llm.NotificationGenerator(client=client, model="test-model").generate(
+                "secret prompt should not be logged",
+                user_id=953,
+                notification_type="SENTIMENT_QA",
+            )
+
+    message = caplog.text
+    assert "OpenAI LLM failed after all retries" in message
+    assert "user_id=953" in message
+    assert "notification_type=SENTIMENT_QA" in message
+    assert "model=test-model" in message
+    assert "retry_attempt=4" in message
+    assert "error_type=RuntimeError" in message
+    assert "secret prompt should not be logged" not in message
 
 
 def test_openai_stops_after_three_retries(monkeypatch):

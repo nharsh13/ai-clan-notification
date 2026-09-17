@@ -16,7 +16,7 @@ class DummyGenerator:
     def __init__(self):
         self.prompts = []
 
-    def generate(self, prompt):
+    def generate(self, prompt, **kwargs):
         self.prompts.append(prompt)
         return {
             "title": "Growth Check",
@@ -245,13 +245,15 @@ def test_performance_flow_propagates_llm_failure(monkeypatch):
     })
 
     class FailingGenerator:
-        def generate(self, prompt):
+        def generate(self, prompt, **kwargs):
             raise RuntimeError("LLM unavailable")
 
-    service = service_module.NotificationService(sender=DummySender(), generator=FailingGenerator())
+    sender = DummySender()
+    service = service_module.NotificationService(sender=sender, generator=FailingGenerator())
     import pytest
     with pytest.raises(RuntimeError, match="LLM unavailable"):
-        service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
+        service.build_notification(NotificationRequest(user_id=953, flow="performance"))
+    assert sender.calls == []
 
 
 def test_sender_receives_selected_video_reference(monkeypatch):
@@ -415,7 +417,7 @@ def test_sentiment_llm_failure_does_not_save_history(monkeypatch):
     monkeypatch.setattr(service_module, "save_sentiment_notification_history", saved.extend)
 
     class FailingGenerator:
-        def generate(self, prompt):
+        def generate(self, prompt, **kwargs):
             raise RuntimeError("LLM unavailable")
 
     service = _configure_sentiment_service(monkeypatch, DummySender(), FailingGenerator())

@@ -1,7 +1,7 @@
 import pytest
 
 import app.config as config
-import app.llm.notification_generator as notification_generator
+import app.llm.llm_client as notification_generator
 
 
 # ============================================================
@@ -34,6 +34,7 @@ def test_load_settings_reads_environment(monkeypatch):
         "REMOTE_NOTIFICATION_SEND_URL",
         "https://notify.example/send",
     )
+    monkeypatch.setenv("OPENAI_TIMEOUT_SECONDS", "12")
 
     settings = config.load_settings()
 
@@ -50,6 +51,7 @@ def test_load_settings_reads_environment(monkeypatch):
     assert settings.notification_send_url == (
         "https://notify.example/send"
     )
+    assert settings.openai_timeout_seconds == 12
 
 
 # ============================================================
@@ -188,8 +190,9 @@ def test_llm_client_receives_configured_api_key(
     captured = {}
 
     class FakeOpenAI:
-        def __init__(self, api_key):
+        def __init__(self, api_key, timeout):
             captured["api_key"] = api_key
+            captured["timeout"] = timeout
 
     monkeypatch.setattr(
         notification_generator,
@@ -206,3 +209,4 @@ def test_llm_client_receives_configured_api_key(
     notification_generator._get_openai_client()
 
     assert captured["api_key"] == "sk-configured"
+    assert captured["timeout"] == config.OPENAI_TIMEOUT_SECONDS

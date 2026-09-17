@@ -21,6 +21,7 @@ class Settings:
 	notification_send_url: str
 	notification_timeout_seconds: float
 	video_deep_link_template: str
+	openai_timeout_seconds: float = 60
 
 
 def load_settings() -> Settings:
@@ -35,12 +36,14 @@ def load_settings() -> Settings:
 		),
 	).strip().lower()
 	timeout = os.getenv("REMOTE_NOTIFICATION_TIMEOUT_SECONDS", "30").strip()
+	openai_timeout = os.getenv("OPENAI_TIMEOUT_SECONDS", "60").strip()
 
 	try:
 		timeout_seconds = float(timeout)
+		openai_timeout_seconds = float(openai_timeout)
 	except ValueError as exc:
 		raise ConfigurationError(
-			"REMOTE_NOTIFICATION_TIMEOUT_SECONDS must be a number"
+			"REMOTE_NOTIFICATION_TIMEOUT_SECONDS and OPENAI_TIMEOUT_SECONDS must be numbers"
 		) from exc
 
 	default_embedding_model = (
@@ -66,6 +69,7 @@ def load_settings() -> Settings:
 		video_deep_link_template=os.getenv(
 			"VIDEO_DEEP_LINK_TEMPLATE", "/videos/{video_id}"
 		).strip(),
+		openai_timeout_seconds=openai_timeout_seconds,
 	)
 
 
@@ -121,3 +125,4 @@ EMBEDDING_MODEL = _settings.embedding_model
 REMOTE_NOTIFICATION_SEND_URL = _settings.notification_send_url
 REMOTE_NOTIFICATION_TIMEOUT_SECONDS = _settings.notification_timeout_seconds
 VIDEO_DEEP_LINK_TEMPLATE = _settings.video_deep_link_template
+OPENAI_TIMEOUT_SECONDS = _settings.openai_timeout_seconds
