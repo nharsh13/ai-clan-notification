@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 
 from app.database.notification_repository import (
     determine_user_cycle_day,
+    get_next_manual_notification_for_user,
     get_next_notification_for_user,
     schedule_next_notification_for_user,
 )
@@ -37,6 +38,8 @@ class FakeConnection:
 
         user_id = params.get("user_id") if params else None
         rows = self.rows_by_user.get(user_id, [])
+        if "ORDER BY ID DESC" in q:
+            rows = sorted(rows, key=lambda row: row.get("id", 0), reverse=True)
         if params and "created_on" in params and rows:
             rows = [
                 row for row in rows
@@ -114,6 +117,29 @@ def test_new_user_starts_on_day_1():
     engine = FakeEngine({})
     assert determine_user_cycle_day(999, db_engine=engine, as_of_date=date(2026, 2, 1)) == 1
     assert get_next_notification_for_user(999, db_engine=engine, as_of_date=date(2026, 2, 1)) == "VIDEO_RECOMMENDATION"
+
+
+def test_manual_cycle_uses_latest_event_type():
+    for event_type, expected in [
+        ("VIDEO_RECOMMENDATION", "SENTIMENT_ENGAGEMENT"),
+        ("SENTIMENT_ENGAGEMENT", "SENTIMENT_QA"),
+        ("SENTIMENT_QA", "VIDEO_RECOMMENDATION"),
+    ]:
+        engine = FakeEngine({953: [{"event_type": event_type, "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc)}]})
+        assert get_next_manual_notification_for_user(953, db_engine=engine) == expected
+
+
+def test_manual_cycle_uses_highest_notification_id():
+    engine = FakeEngine({953: [
+        {"id": 10, "event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc)},
+        {"id": 11, "event_type": "SENTIMENT_ENGAGEMENT", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc)},
+    ]})
+
+    assert get_next_manual_notification_for_user(953, db_engine=engine) == "SENTIMENT_QA"
+
+
+def test_manual_cycle_starts_with_performance_for_new_user():
+    assert get_next_manual_notification_for_user(953, db_engine=FakeEngine()) == "VIDEO_RECOMMENDATION"
 
 
 def test_users_have_independent_cycles():

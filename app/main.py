@@ -3,6 +3,8 @@ from fastapi import FastAPI, HTTPException, Query
 import logging
 
 from app.config import ConfigurationError, validate_configuration
+from app.constants import FLOW_BY_EVENT_TYPE
+from app.database.notification_repository import get_next_manual_notification_for_user
 from app.notifications.models import (
     NotificationRequest,
     NotificationResponse,
@@ -50,9 +52,18 @@ def get_sentiment(user_id: int = Query(gt=0)):
 @app.post("/notification/send")
 def send_notification(request: NotificationSendRequest):
     try:
+        event_type = get_next_manual_notification_for_user(
+            request.user_id,
+            db_engine=service.db_engine,
+        )
+
+        flow = FLOW_BY_EVENT_TYPE.get(event_type)
+        if flow is None:
+            raise ValueError(f"Unsupported notification event type: {event_type}")
+
         pipeline_request = NotificationRequest(
             user_id=request.user_id,
-            flow="performance",
+            flow=flow,
         )
         result = service.build_notification(pipeline_request)
         if result.remote_send_status == "failed":

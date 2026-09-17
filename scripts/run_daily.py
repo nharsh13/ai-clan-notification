@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
+from app.constants import FLOW_BY_EVENT_TYPE
 from app.database.connection import engine
 from app.database.notification_repository import (
     get_next_notification_for_user,
@@ -15,13 +16,6 @@ from app.notifications.service import NotificationService
 
 logging.basicConfig(level=logging.INFO)
 SCHEDULER_LOCK_KEY = 781234567
-
-FLOW_BY_EVENT_TYPE = {
-    "VIDEO_RECOMMENDATION": "performance",
-    "SENTIMENT_ENGAGEMENT": "engagement",
-    "SENTIMENT_QA": "sentiment",
-}
-
 
 def main() -> None:
     service = NotificationService()

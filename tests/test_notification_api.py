@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+import app.main as main_module
 from app.main import app, service
 from app.notifications.models import NotificationProcessingResult
 
@@ -8,6 +9,8 @@ client = TestClient(app)
 
 
 def test_performance_send_matches_contract_and_forwards_selected_video(monkeypatch):
+    monkeypatch.setattr(main_module, "get_next_manual_notification_for_user", lambda *args, **kwargs: "VIDEO_RECOMMENDATION")
+
     def build_notification(request):
         assert request.user_id == 953
         return NotificationProcessingResult(
@@ -70,6 +73,8 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
 
 
 def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
+    monkeypatch.setattr(main_module, "get_next_manual_notification_for_user", lambda *args, **kwargs: "VIDEO_RECOMMENDATION")
+
     monkeypatch.setattr(
         service,
         "build_notification",
@@ -88,6 +93,50 @@ def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
 
     assert response.status_code == 502
     assert response.json()["detail"] == "Remote API error 503"
+
+
+def test_send_follows_notification_cycle(monkeypatch):
+    event_types = iter([
+        "VIDEO_RECOMMENDATION",
+        "SENTIMENT_ENGAGEMENT",
+        "SENTIMENT_QA",
+        "VIDEO_RECOMMENDATION",
+    ])
+    requested_flows = []
+
+    def select_next_event(*args, **kwargs):
+        return next(event_types)
+
+    def build_notification(request):
+        requested_flows.append(request.flow)
+        return NotificationProcessingResult(
+            user_id=953,
+            flow=request.flow,
+            notification_type={
+                "performance": "VIDEO_RECOMMENDATION",
+                "engagement": "SENTIMENT_ENGAGEMENT",
+                "sentiment": "SENTIMENT_QA",
+            }[request.flow],
+            notification_title="Title",
+            notification_body="Body",
+            should_send=True,
+            reference_id=1,
+            remote_send_status="sent",
+        )
+
+    monkeypatch.setattr(main_module, "get_next_manual_notification_for_user", select_next_event)
+    monkeypatch.setattr(
+        main_module,
+        "insert_notification",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("/notification/send must not insert history")),
+        raising=False,
+    )
+    monkeypatch.setattr(service, "build_notification", build_notification)
+
+    responses = [client.post("/notification/send", json={"user_id": 953}) for _ in range(4)]
+
+    assert [response.status_code for response in responses] == [200, 200, 200, 200]
+    assert requested_flows == ["performance", "engagement", "sentiment", "performance"]
 
 
 def test_performance_endpoint_is_read_only(monkeypatch):

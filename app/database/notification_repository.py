@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy import text
 
-from app.constants import NOTIFICATION_CYCLE
+from app.constants import NEXT_NOTIFICATION_BY_EVENT_TYPE, NOTIFICATION_CYCLE
 from app.database.connection import engine
 
 
@@ -63,6 +63,30 @@ def get_next_notification_for_user(user_id: int, *, db_engine=engine, as_of_date
     if cycle_day not in NOTIFICATION_CYCLE:
         return None
     return NOTIFICATION_CYCLE[cycle_day]
+
+
+def get_next_manual_notification_for_user(user_id: int, *, db_engine=engine) -> str:
+    query = text(
+        """
+        SELECT event_type
+        FROM public.notification
+        WHERE target_user_id = :user_id
+          AND status = 1
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+
+    with db_engine.connect() as connection:
+        row = connection.execute(query, {"user_id": user_id}).mappings().first()
+
+    if row is None:
+        return "VIDEO_RECOMMENDATION"
+
+    try:
+        return NEXT_NOTIFICATION_BY_EVENT_TYPE[row["event_type"]]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported notification event type: {row['event_type']}") from exc
 
 
 def has_notification_for_user_on_date(
