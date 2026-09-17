@@ -77,34 +77,49 @@ def prepare_user_qa(
 
 
 def get_eligible_user_qa(user_id: int, db_engine=engine) -> list[dict]:
-    """Return active answered Q&A not already recorded in sentiment history."""
+    """Return unused active Q&A, restarting from all active Q&A when exhausted."""
 
     query = text("""
-        SELECT
-            r.id AS response_id,
-            r.user_id,
-            r.question_id,
-            q.question,
-            r.answer_id,
-            a.answer_text AS answer
-        FROM public.user_persona_question_responces r
-        JOIN public.user_persona_question q
-            ON q.id = r.question_id
-        JOIN public.user_persona_question_answers a
-            ON a.id = r.answer_id
-           AND a.question_id = r.question_id
-        WHERE r.user_id = :user_id
-          AND r.status = 1
-          AND NOT EXISTS (
-              SELECT 1
-              FROM public.sentiment_notification_history h
-              WHERE h.user_id = r.user_id
-                AND h.response_id = r.id
-                AND h.question_id = r.question_id
-                AND h.answer_id = r.answer_id
-                AND h.status = 1
-          )
-        ORDER BY r.created_at, r.id
+        WITH all_responses AS (
+            SELECT
+                r.id AS response_id,
+                r.user_id,
+                r.question_id,
+                q.question,
+                r.answer_id,
+                a.answer_text AS answer,
+                r.created_at
+            FROM public.user_persona_question_responces r
+            JOIN public.user_persona_question q
+                ON q.id = r.question_id
+            JOIN public.user_persona_question_answers a
+                ON a.id = r.answer_id
+               AND a.question_id = r.question_id
+            WHERE r.user_id = :user_id
+              AND r.status = 1
+        ), unused_responses AS (
+            SELECT response.*
+            FROM all_responses response
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM public.sentiment_notification_history h
+                WHERE h.user_id = response.user_id
+                  AND h.response_id = response.response_id
+                  AND h.question_id = response.question_id
+                  AND h.answer_id = response.answer_id
+                  AND h.status = 1
+            )
+        )
+        SELECT response_id, user_id, question_id, question, answer_id, answer
+        FROM (
+            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at
+            FROM unused_responses
+            UNION ALL
+            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at
+            FROM all_responses
+            WHERE NOT EXISTS (SELECT 1 FROM unused_responses)
+        ) selected_responses
+        ORDER BY created_at, response_id
     """)
 
     with db_engine.connect() as connection:

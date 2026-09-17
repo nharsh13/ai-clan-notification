@@ -48,11 +48,16 @@ def test_eligible_qa_history_check_uses_exact_response_answer_identity():
     sent.get_eligible_user_qa(953, cast(Engine, engine))
 
     query = engine.connection.query
-    assert "h.user_id = r.user_id" in query
-    assert "h.response_id = r.id" in query
-    assert "h.question_id = r.question_id" in query
-    assert "h.answer_id = r.answer_id" in query
+    assert "h.user_id = response.user_id" in query
+    assert "h.response_id = response.response_id" in query
+    assert "h.question_id = response.question_id" in query
+    assert "h.answer_id = response.answer_id" in query
     assert "h.status = 1" in query
+    assert "FROM unused_responses" in query
+    assert "FROM all_responses" in query
+    assert "WHERE NOT EXISTS (SELECT 1 FROM unused_responses)" in query
+    assert "DELETE FROM public.sentiment_notification_history" not in query
+    assert "UPDATE public.sentiment_notification_history" not in query
     assert engine.connection.params == {"user_id": 953}
 
 
