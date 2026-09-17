@@ -42,45 +42,65 @@ Rules:
 2. Write the notification directly in the requested language.
 3. Use very simple, everyday language.
 4. Write like a mobile app notification.
-5. Keep the title short and interesting.
+5. Keep the title short, interesting, and meaningful.
 6. The title MUST include the user's name.
 7. The title MUST NOT be only "Hello {user_name}".
-8. The title should contain a short motivational phrase.
+8. The title should contain a short motivational or encouraging phrase.
+
 9. If notification_type is "IMPROVEMENT":
    - Encourage the user to participate more in CLAN.
    - Encourage the user to answer more CLAN questions.
    - Keep the message positive.
+   - Use an encouraging title such as:
+     - "Hello {user_name}, Let's Stay Engaged"
+     - "Hello {user_name}, Your Voice Matters"
+     - "Hello {user_name}, Let's Keep Growing"
+     - "Hello {user_name}, Keep Taking Part"
+     - "Hello {user_name}, Let's Keep Moving"
+     - "Hello {user_name}, Keep Building"
+     - "Hello {user_name}, Stay Connected"
+     - "Hello {user_name}, Keep Going"
+
 10. If notification_type is "POSITIVE":
-   - Appreciate the user's CLAN participation.
-   - Encourage the user to continue participating.
+    - Appreciate the user's CLAN participation.
+    - Encourage the user to continue participating.
+    - Use a positive title such as:
+      - "Hello {user_name}, Great Progress"
+      - "Hello {user_name}, Great Work"
+      - "Hello {user_name}, Keep Learning"
+      - "Hello {user_name}, Keep Growing"
+      - "Hello {user_name}, Keep It Going"
+      - "Hello {user_name}, You're Doing Great"
+      - "Hello {user_name}, Keep Taking Part"
+
 11. Do NOT show the response percentage.
 12. Do NOT show the number of questions sent or answered.
 13. Do NOT mention individual questions.
 14. Do NOT shame, blame, or criticize the user.
 15. Do NOT use words such as:
-   "bad", "poor", "lazy", "weak", "failure",
-   or similar negative words.
+    "bad", "poor", "lazy", "weak", "failure",
+    or similar negative words.
 16. Do NOT use difficult, formal, technical, or complicated words.
 17. Do NOT make claims that are not supported by the input.
 18. Keep the description short, clear, and actionable.
 19. The description should tell the user what they can do next.
 20. Return ONLY valid JSON.
 21. Return exactly two fields:
-   "title"
-   "description"
+    "title"
+    "description"
 22. Do NOT return Markdown, explanations, or any extra text.
 
 Example for IMPROVEMENT:
 
 {{
-    "title": "Hello {user_name}, Let's Participate",
+    "title": "Hello {user_name}, Let's Stay Engaged",
     "description": "Answer more CLAN questions and keep learning."
 }}
 
 Example for POSITIVE:
 
 {{
-    "title": "Hello {user_name}, Great Work",
+    "title": "Hello {user_name}, Great Progress",
     "description": "Keep taking part in CLAN and continue learning."
 }}
 
