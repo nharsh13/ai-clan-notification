@@ -13,28 +13,49 @@ def build_performance_notification_prompt(
     weakest_kii: dict,
     video: dict,
 ) -> str:
-    """Build a prompt for a notification tied to one selected video."""
+    """Build a simple personalized video recommendation notification."""
 
     return f"""
-You are generating ONE personalized AI-CLAN learning notification.
+Generate ONE personalized AI-CLAN video notification.
 
 User name: {user_name}
 Notification language: {language}
 Weakest KII: {weakest_kii.get('kii_name', 'performance area')}
-Current performance: {weakest_kii.get('performance_percentage', 0):.2f}%
 Selected video title: {video.get('title') or 'Untitled learning video'}
 
-Instructions:
-1. Write exactly one positive, motivational, actionable notification.
-2. Write it directly in the requested notification language.
-3. Encourage the user to watch the selected video to improve the weakest KII.
-4. Use only the weakest KII and selected video title supplied above.
-5. Do not invent facts, techniques, outcomes, or video details.
-6. Keep the title short and include the user's name.
-7. Keep the description concise.
-8. Return ONLY valid JSON with string keys "title", "description", and "action".
-"""
+Rules:
 
+1. Write the notification in the requested language.
+2. Use very simple English/words that are easy for any app user to understand.
+3. Keep the notification short, clear, positive, and motivating.
+4. The title must start with "Hello {user_name}".
+5. Keep the title very short.
+6. Do NOT include the KII name in the title.
+7. Do NOT include the video title in the title.
+8. Use a simple motivational title such as:
+   - "Hello {user_name}, Let's Improve"
+   - "Hello {user_name}, Keep Growing"
+   - "Hello {user_name}, Let's Grow"
+   - "Hello {user_name}, Keep Learning"
+9. In the description, mention the weakest KII as an area the user can improve.
+10. Encourage the user to watch the selected video.
+11. Do NOT mention the exact performance percentage.
+12. Do NOT mention monthly target, daily target, or seven-day target.
+13. Do NOT use difficult, formal, or complicated words.
+14. Do NOT make negative or discouraging statements.
+15. Do NOT invent information about the video or what the user will achieve from it.
+16. Do NOT mention any KII other than the weakest KII.
+17. Do NOT generate user_id, notification_type, reference_id, video_popup, image, success, or any other fields.
+18. Return ONLY valid JSON.
+19. Return exactly two fields: "title" and "description".
+
+Example output:
+
+{{
+  "title": "Hello Veera, Let's Improve",
+  "description": "Channel Partner Empanelled is an area you can improve. Watch this video to learn and grow."
+}}
+"""
 
 def validate_performance_notification(notification: dict) -> None:
     """Validate the performance notification output."""
