@@ -51,6 +51,58 @@ def test_embed_text_returns_384_dimensions(monkeypatch):
     assert all(value == 0.0 for value in result)
 
 
+def test_recommend_video_embeds_exact_weakest_kii_query(monkeypatch):
+    captured = {}
+
+    def fake_embed(text):
+        captured["text"] = text
+        return [0.0] * 384
+
+    monkeypatch.setattr(
+        rec,
+        "search_videos",
+        lambda **kwargs: {"video_id": 123, "title": "Improve customer generation"},
+    )
+
+    result = rec.recommend_video(
+        performance=type(
+            "PerformanceContext",
+            (),
+            {"kii_id": 121, "kii_name": "Customer Generation", "performance_percentage": 42.86},
+        )(),
+        language_id=[2, 5],
+        embed=fake_embed,
+        db_engine=object(),
+        user_id=953,
+    )
+
+    assert result["video_id"] == 123
+    assert captured["text"] == "How to improve Customer Generation"
+
+
+def test_recommend_video_logs_and_propagates_embedding_failure(monkeypatch, caplog):
+    def failing_embed(_text):
+        raise RuntimeError("embedding unavailable")
+
+    performance = type(
+        "PerformanceContext",
+        (),
+        {"kii_id": 121, "kii_name": "Customer Generation"},
+    )()
+
+    with caplog.at_level("ERROR", logger="app.recommendation.recommendation"):
+        with pytest.raises(RuntimeError, match="embedding unavailable"):
+            rec.recommend_video(
+                performance=performance,
+                language_id=[2],
+                embed=failing_embed,
+                db_engine=object(),
+                user_id=953,
+            )
+
+    assert "Video recommendation query embedding failed for KII 121" in caplog.text
+
+
 def test_sentence_transformers_embedding_path_does_not_use_openai(
     monkeypatch,
 ):

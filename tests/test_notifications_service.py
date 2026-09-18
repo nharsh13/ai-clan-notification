@@ -233,6 +233,29 @@ def test_performance_flow_handles_no_video(monkeypatch):
         service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
 
 
+def test_performance_flow_does_not_send_when_query_embedding_fails(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+
+    def failing_recommendation(*args, **kwargs):
+        raise RuntimeError("embedding unavailable")
+
+    monkeypatch.setattr(service_module, "recommend_video", failing_recommendation)
+    sender = DummySender()
+    service = service_module.NotificationService(sender=sender, generator=DummyGenerator())
+
+    with pytest.raises(RuntimeError, match="embedding unavailable"):
+        service.build_notification(NotificationRequest(user_id=953, flow="performance"))
+
+    assert sender.calls == []
+
+
 def test_performance_flow_propagates_llm_failure(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Any, Callable
 
@@ -11,6 +12,7 @@ from sentence_transformers import SentenceTransformer
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIMENSIONS = 384
+logger = logging.getLogger(__name__)
 
 
 def _embed_with_sentence_transformers(text: str) -> list[float]:
@@ -45,14 +47,15 @@ def recommend_video(
     if performance is None:
         return None
 
-    performance_percentage = getattr(performance, "performance_percentage", None)
-    performance_context = (
-        f" current performance {float(performance_percentage):.2f}%"
-        if performance_percentage is not None
-        else ""
-    )
-    query = f"{performance.kii_name}: improve performance{performance_context}"
-    query_embedding = embed(query)
+    query = f"How to improve {performance.kii_name}"
+    try:
+        query_embedding = embed(query)
+    except Exception:
+        logger.exception(
+            "Video recommendation query embedding failed for KII %s",
+            performance.kii_id,
+        )
+        raise
 
     if len(query_embedding) != EMBEDDING_DIMENSIONS:
         raise ValueError(
