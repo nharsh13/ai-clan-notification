@@ -72,12 +72,13 @@ def test_search_videos_requires_non_null_embedding():
 	connection = FakeConnection([], [{"video_id": 123}])
 	vector_search.search_videos(
 		kii_id=121,
-		language_id=2,
+		language_id=3,
 		query_embedding=[0.0] * 384,
 		db_engine=FakeEngine(connection),
 		user_id=953,
 	)
 
+	assert "JOIN public.md_language ml ON ml.id = c.language_id" in connection.query
 	assert "ce.embedding IS NOT NULL" in connection.query
 
 

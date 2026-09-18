@@ -249,7 +249,7 @@ def search_videos(
         SELECT c.id AS video_id, c.title, c.description, c.created_by AS creator_name, c.language_id
         FROM public.kii_content_relation kr
         JOIN public.content c ON c.id = kr.content_id AND c.status = 1
-        JOIN public.language l ON l.id = c.language_id
+        JOIN public.md_language ml ON ml.id = c.language_id
         JOIN public.content_embeddings ce ON ce.content_id = c.id
         WHERE kr.kii_id = :kii_id AND kr.status = 1
           {language_filter}
