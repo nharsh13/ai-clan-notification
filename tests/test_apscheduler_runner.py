@@ -30,7 +30,7 @@ def test_create_scheduler_uses_ist_and_daily_time(monkeypatch):
 			created["func"] = func
 			created["job"] = kwargs
 
-	monkeypatch.setattr(runner, "BlockingScheduler", FakeScheduler)
+	monkeypatch.setattr(runner, "BackgroundScheduler", FakeScheduler)
 
 	runner.create_scheduler(runner.ScheduleConfig(hour=11, minute=10))
 
@@ -43,6 +43,43 @@ def test_create_scheduler_uses_ist_and_daily_time(monkeypatch):
 	assert trigger.timezone.key == "Asia/Kolkata"
 	assert str(trigger.fields[5]) == "11"
 	assert str(trigger.fields[6]) == "10"
+
+
+def test_start_scheduler_is_idempotent(monkeypatch):
+	created = []
+
+	class FakeScheduler:
+		running = False
+
+		def start(self):
+			created.append(self)
+			self.running = True
+
+	monkeypatch.setattr(runner, "create_scheduler", lambda: FakeScheduler())
+	runner._scheduler = None
+
+	try:
+		first = runner.start_scheduler()
+		second = runner.start_scheduler()
+		assert first is second
+		assert len(created) == 1
+	finally:
+		runner._scheduler = None
+
+
+def test_shutdown_scheduler_stops_and_clears_scheduler():
+	class FakeScheduler:
+		running = True
+
+		def shutdown(self, wait=True):
+			self.running = False
+
+	runner._scheduler = FakeScheduler()
+	try:
+		runner.shutdown_scheduler()
+		assert runner._scheduler is None
+	finally:
+		runner._scheduler = None
 
 
 @pytest.mark.parametrize(

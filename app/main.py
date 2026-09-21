@@ -12,6 +12,7 @@ from app.notifications.models import (
 )
 from app.notifications.sender import NotificationSender
 from app.notifications.service import NotificationService
+from scripts.apscheduler_runner import shutdown_scheduler, start_scheduler
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -20,7 +21,11 @@ async def lifespan(_app: FastAPI):
     except ConfigurationError as exc:
         logging.getLogger(__name__).error("Configuration error: %s", exc)
         raise
-    yield
+    start_scheduler()
+    try:
+        yield
+    finally:
+        shutdown_scheduler()
 
 
 app = FastAPI(title="AI-CLAN Notification API", lifespan=lifespan)

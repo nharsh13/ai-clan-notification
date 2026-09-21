@@ -282,6 +282,27 @@ class FakeSchedulerEngine:
         return self.connection
 
 
+def test_scheduler_selects_only_required_user_scope(monkeypatch):
+    engine = FakeSchedulerEngine([])
+    monkeypatch.setattr(run_daily, "engine", engine)
+    monkeypatch.setattr(run_daily, "NotificationService", lambda: object())
+
+    run_daily.main()
+
+    selection_query = next(
+        query
+        for query in engine.connection.queries
+        if "SELECT id" in query
+    )
+    normalized_query = " ".join(selection_query.split()).lower()
+    assert 'from public."user"' in normalized_query
+    assert "where account_id = 14" in normalized_query
+    assert "and status = 1" in normalized_query
+    assert "and debug = false" in normalized_query
+    assert "and user_type_id = 1" in normalized_query
+    assert "id is not null" not in normalized_query
+
+
 def test_scheduler_rejects_second_process_and_releases_lock(monkeypatch):
     engine = FakeSchedulerEngine([1], lock_acquired=False)
     processed = []

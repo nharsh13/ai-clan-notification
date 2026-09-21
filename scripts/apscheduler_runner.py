@@ -1,9 +1,10 @@
 import logging
 import os
+from threading import Event, Lock
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
 
@@ -11,6 +12,8 @@ from scripts.run_daily import main as run_daily
 
 logger = logging.getLogger(__name__)
 SCHEDULER_TIMEZONE = ZoneInfo("Asia/Kolkata")
+_scheduler_lock = Lock()
+_scheduler: BackgroundScheduler | None = None
 
 
 @dataclass(frozen=True)
@@ -39,9 +42,9 @@ def load_schedule_config() -> ScheduleConfig:
 	return ScheduleConfig(hour=hour, minute=minute)
 
 
-def create_scheduler(config: ScheduleConfig | None = None) -> BlockingScheduler:
+def create_scheduler(config: ScheduleConfig | None = None) -> BackgroundScheduler:
 	schedule = config or load_schedule_config()
-	scheduler = BlockingScheduler(timezone=SCHEDULER_TIMEZONE)
+	scheduler = BackgroundScheduler(timezone=SCHEDULER_TIMEZONE)
 	scheduler.add_job(
 		run_daily,
 		trigger=CronTrigger(
@@ -57,6 +60,24 @@ def create_scheduler(config: ScheduleConfig | None = None) -> BlockingScheduler:
 	return scheduler
 
 
+def start_scheduler() -> BackgroundScheduler:
+	global _scheduler
+	with _scheduler_lock:
+		if _scheduler is None:
+			_scheduler = create_scheduler()
+		if not _scheduler.running:
+			_scheduler.start()
+		return _scheduler
+
+
+def shutdown_scheduler() -> None:
+	global _scheduler
+	with _scheduler_lock:
+		if _scheduler is not None and _scheduler.running:
+			_scheduler.shutdown(wait=True)
+		_scheduler = None
+
+
 def main() -> None:
 	config = load_schedule_config()
 	logger.info(
@@ -65,7 +86,12 @@ def main() -> None:
 		config.hour,
 		config.minute,
 	)
-	create_scheduler(config).start()
+	scheduler = create_scheduler(config)
+	scheduler.start()
+	try:
+		Event().wait()
+	finally:
+		scheduler.shutdown(wait=True)
 
 
 if __name__ == "__main__":

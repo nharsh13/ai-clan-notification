@@ -33,7 +33,16 @@ def main() -> None:
                 user_ids = [
                     row[0]
                     for row in connection.execute(
-                        text('SELECT id FROM public."user" WHERE id IS NOT NULL')
+                        text(
+                            '''
+                            SELECT id
+                            FROM public."user"
+                            WHERE account_id = 14
+                              AND status = 1
+                              AND debug = false
+                              AND user_type_id = 1
+                            '''
+                        )
                     )
                 ]
 
