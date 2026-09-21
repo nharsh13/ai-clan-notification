@@ -1,3 +1,5 @@
+import pytest
+
 import app.notifications.service as service_module
 from app.notifications.models import NotificationRequest
 
@@ -228,9 +230,174 @@ def test_performance_flow_handles_no_video(monkeypatch):
     monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: None)
     service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
 
-    import pytest
-    with pytest.raises(ValueError, match="No suitable video"):
-        service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False)
+    )
+
+    assert result is None
+    assert service.generator.prompts == []
+    assert service.sender.calls == []
+
+
+@pytest.mark.parametrize("video_language_id", [9, 3])
+def test_performance_flow_keeps_valid_hindi_and_telugu_recommendations(
+    monkeypatch,
+    video_language_id,
+):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "en",
+        "video_language_ids": [video_language_id],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {
+        "video_id": 55,
+        "title": "Focus better",
+    })
+
+    result = service_module.NotificationService(
+        sender=DummySender(),
+        generator=DummyGenerator(),
+    ).build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False)
+    )
+
+    assert result is not None
+    assert result.video_id == 55
+    assert result.notification_type == "VIDEO_RECOMMENDATION"
+
+
+@pytest.mark.parametrize("video_language_id", [9, 3])
+def test_performance_flow_skips_when_hindi_or_telugu_video_is_unavailable(
+    monkeypatch,
+    video_language_id,
+):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "en",
+        "video_language_ids": [video_language_id],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: None)
+    sender = DummySender()
+    generator = DummyGenerator()
+
+    result = service_module.NotificationService(
+        sender=sender,
+        generator=generator,
+    ).build_notification(
+        NotificationRequest(user_id=953, flow="performance")
+    )
+
+    assert result is None
+    assert generator.prompts == []
+    assert sender.calls == []
+
+
+def test_performance_flow_skips_missing_video_preference_without_english_fallback(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "en",
+        "video_language_ids": None,
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    recommender_called = []
+    monkeypatch.setattr(
+        service_module,
+        "recommend_video",
+        lambda *args, **kwargs: recommender_called.append(True),
+    )
+    sender = DummySender()
+    generator = DummyGenerator()
+
+    result = service_module.NotificationService(
+        sender=sender,
+        generator=generator,
+    ).build_notification(
+        NotificationRequest(user_id=953, flow="performance")
+    )
+
+    assert result is None
+    assert recommender_called == []
+    assert generator.prompts == []
+    assert sender.calls == []
+
+
+@pytest.mark.parametrize("app_language", ["en", "hi", "te"])
+def test_performance_flow_does_not_infer_video_preference_from_app_language(
+    monkeypatch,
+    app_language,
+):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": app_language,
+        "video_language_ids": [],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    recommender_called = []
+    monkeypatch.setattr(
+        service_module,
+        "recommend_video",
+        lambda *args, **kwargs: recommender_called.append(True),
+    )
+
+    result = service_module.NotificationService(
+        sender=DummySender(),
+        generator=DummyGenerator(),
+    ).build_notification(
+        NotificationRequest(user_id=953, flow="performance")
+    )
+
+    assert result is None
+    assert recommender_called == []
+
+
+@pytest.mark.parametrize("recommendation", [
+    {"video_id": 88, "title": "English focus"},
+    None,
+])
+def test_performance_flow_supports_configured_future_video_language(
+    monkeypatch,
+    recommendation,
+):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "en",
+        "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    monkeypatch.setattr(
+        service_module,
+        "recommend_video",
+        lambda performance, language_id, embed, db_engine, user_id: recommendation,
+    )
+    generator = DummyGenerator()
+    sender = DummySender()
+
+    result = service_module.NotificationService(
+        sender=sender,
+        generator=generator,
+    ).build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False)
+    )
+
+    if recommendation is None:
+        assert result is None
+        assert generator.prompts == []
+    else:
+        assert result is not None
+        assert result.video_id == 88
+        assert result.notification_type == "VIDEO_RECOMMENDATION"
 
 
 def test_performance_flow_does_not_send_when_query_embedding_fails(monkeypatch):

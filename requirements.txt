@@ -7,3 +7,4 @@ openai
 sentence-transformers
 pytest
 httpx
+APScheduler>=3.10,<4

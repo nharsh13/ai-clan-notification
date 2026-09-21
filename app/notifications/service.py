@@ -58,8 +58,6 @@ class NotificationService:
         if not language_code:
             raise ValueError(f"App language is missing: {user_id}")
         video_language_ids = profile.get("video_language_ids") or []
-        if require_video_language and not video_language_ids:
-            raise ValueError(f"User video language is missing: {user_id}")
 
         return {
             "user_name": profile.get("user_name") or profile.get("name") or f"User {user_id}",
@@ -124,6 +122,8 @@ class NotificationService:
         )
         user_name = str(profile["user_name"]).strip() or f"User {request.user_id}"
         language = str(profile["app_language_code"]).strip()
+        if request.flow == "performance" and not profile["video_language_ids"]:
+            return None
         if request.flow == "engagement":
             response_data = get_user_response_rate(request.user_id)
             if not response_data or response_data["questions_sent"] == 0:
@@ -199,10 +199,7 @@ class NotificationService:
             user_id=request.user_id,
         )
         if recommendation is None:
-            raise ValueError(
-                f"No suitable video found for KII {weakest['kii_id']} "
-                f"and language {language_id}"
-            )
+            return None
 
         return user_name, {
             "user_id": request.user_id,
