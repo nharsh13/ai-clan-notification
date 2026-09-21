@@ -22,7 +22,7 @@ def get_user(user_id: int, db_engine=engine) -> dict[str, Any] | None:
         LEFT JOIN public.md_app_languages AS app_lang
             ON app_lang.id = u.app_language_id
         LEFT JOIN public.user_language AS ul ON ul.user_id = u.id
-        LEFT JOIN public.language AS l ON l.id = ul.language_id
+        LEFT JOIN public.md_language AS l ON l.id = ul.language_id
         WHERE u.id = :user_id
         GROUP BY u.id, u.name, e.account_id, u.app_language_id, app_lang.language_code
         """

@@ -435,6 +435,49 @@ def test_sentiment_with_no_eligible_qa_skips_llm_and_sender(monkeypatch):
     assert sender.calls == []
 
 
+def test_get_sentiment_returns_unused_qa(monkeypatch):
+    monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: [{
+        "user_id": 953,
+        "question_id": 4,
+        "question": "How do you handle feedback?",
+        "answer_id": 8,
+        "answer": "I listen carefully.",
+        "selection_type": "NEW",
+    }])
+
+    service = service_module.NotificationService()
+
+    assert service.get_sentiment(953) == {
+        "user_id": 953,
+        "responses": [{
+            "question_id": 4,
+            "question": "How do you handle feedback?",
+            "answer_id": 8,
+            "answer": "I listen carefully.",
+        }],
+    }
+
+
+def test_get_sentiment_reuses_qa_when_all_are_exhausted(monkeypatch):
+    monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: [{
+        "user_id": 953,
+        "question_id": 3,
+        "question": "What kind of customers do you like most?",
+        "answer_id": 9,
+        "answer": "Curious customers.",
+        "selection_type": "REUSED",
+    }])
+
+    service = service_module.NotificationService()
+
+    assert service.get_sentiment(953)["responses"] == [{
+        "question_id": 3,
+        "question": "What kind of customers do you like most?",
+        "answer_id": 9,
+        "answer": "Curious customers.",
+    }]
+
+
 def test_sentiment_llm_failure_does_not_save_history(monkeypatch):
     saved = []
     monkeypatch.setattr(service_module, "save_sentiment_notification_history", saved.extend)

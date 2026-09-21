@@ -22,7 +22,6 @@ from app.notifications.sender import NotificationSender
 from app.performance.performance import calculate_performance
 from app.recommendation.recommendation import embed_text, recommend_video
 from app.sentiment.sentiment import (
-    get_next_sentiment_response,
     get_eligible_user_qa,
     get_user_response_rate,
     prepare_user_qa,
@@ -144,6 +143,30 @@ class NotificationService:
                     "history_records": [],
                     "context": "your recent responses and workplace reflections",
                 }
+            selection_type = eligible_responses[0].get("selection_type", "NEW")
+            if selection_type == "REUSED":
+                logger.info("No unused Q&A available.")
+            for response in eligible_responses:
+                logger.info(
+                    "User ID: %s\n"
+                    "Selected Question ID: %s\n"
+                    "Selected Question: %s\n"
+                    "Selected Answer ID: %s\n"
+                    "Selected Answer: %s\n"
+                    "Selection Type: %s",
+                    response["user_id"],
+                    response["question_id"],
+                    response["question"],
+                    response["answer_id"],
+                    response["answer"],
+                    selection_type,
+                )
+                if selection_type == "REUSED":
+                    logger.info(
+                        "Reusing previous Question ID: %s\nAnswer ID: %s",
+                        response["question_id"],
+                        response["answer_id"],
+                    )
             prepared_qa = prepare_user_qa(
                 request.user_id,
                 self.db_engine,
@@ -212,20 +235,43 @@ class NotificationService:
         return response_data
 
     def get_sentiment(self, user_id: int) -> dict[str, Any]:
-        selected_question = get_next_sentiment_response(user_id, self.db_engine)
-        if selected_question is None:
+        eligible_responses = get_eligible_user_qa(user_id, self.db_engine)
+        if not eligible_responses:
             return {"user_id": user_id, "responses": []}
 
-        responses = [
-            {
-                "question_id": response["question_id"],
-                "question": response["question"],
-                "answer_id": response["answer_id"],
-                "answer": response["answer"],
-            }
-            for response in selected_question.get("responses", [selected_question])
-        ]
-        return {"user_id": user_id, "responses": responses}
+        selected_response = eligible_responses[0]
+        selection_type = selected_response.get("selection_type", "NEW")
+        logger.info(
+            "User ID: %s\n"
+            "Selected Question ID: %s\n"
+            "Selected Question: %s\n"
+            "Selected Answer ID: %s\n"
+            "Selected Answer: %s\n"
+            "Selection Type: %s",
+            selected_response["user_id"],
+            selected_response["question_id"],
+            selected_response["question"],
+            selected_response["answer_id"],
+            selected_response["answer"],
+            selection_type,
+        )
+        if selection_type == "REUSED":
+            logger.info("No unused Q&A available.")
+            logger.info(
+                "Reusing previous Question ID: %s\nAnswer ID: %s",
+                selected_response["question_id"],
+                selected_response["answer_id"],
+            )
+
+        return {
+            "user_id": user_id,
+            "responses": [{
+                "question_id": selected_response["question_id"],
+                "question": selected_response["question"],
+                "answer_id": selected_response["answer_id"],
+                "answer": selected_response["answer"],
+            }],
+        }
 
     def build_notification(
         self,

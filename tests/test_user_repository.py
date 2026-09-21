@@ -30,6 +30,7 @@ class FakeConnection:
         assert "u.app_language_id" in self.query
         assert "md_app_languages" in self.query
         assert "user_language" in self.query
+        assert "md_language" in self.query
         return FakeResult()
 
     def __enter__(self):

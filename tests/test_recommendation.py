@@ -163,7 +163,7 @@ def test_user_language_id_maps_to_language_table():
                     l.id AS language_table_id,
                     l.code AS language_code
                 FROM public.user_language ul
-                JOIN public.language l
+                JOIN public.md_language l
                     ON l.id = ul.language_id
                 WHERE ul.user_id = :user_id
                 """

@@ -110,12 +110,12 @@ def get_eligible_user_qa(user_id: int, db_engine=engine) -> list[dict]:
                   AND h.status = 1
             )
         )
-        SELECT response_id, user_id, question_id, question, answer_id, answer
+        SELECT response_id, user_id, question_id, question, answer_id, answer, selection_type
         FROM (
-            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at
+            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at, 'NEW' AS selection_type
             FROM unused_responses
             UNION ALL
-            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at
+            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at, 'REUSED' AS selection_type
             FROM all_responses
             WHERE NOT EXISTS (SELECT 1 FROM unused_responses)
         ) selected_responses
