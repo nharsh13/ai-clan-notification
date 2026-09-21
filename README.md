@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # AI-CLAN Notification
 
 AI-CLAN exposes one common notification pipeline for three business flows:
@@ -94,3 +95,6 @@ generates and sends a personalized notification.
 
 The optional `flow` value is `performance`, `engagement`, or `sentiment`. All
 flows produce the same notification object and use the same remote sender.
+=======
+# ai-clan-notification
+>>>>>>> 58b73495156fed04d57f13aebd584ab7ac400484
