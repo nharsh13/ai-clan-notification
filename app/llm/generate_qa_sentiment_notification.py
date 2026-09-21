@@ -44,9 +44,9 @@ Requirements:
 - Use simple, friendly, everyday language.
 - Write like a short mobile app notification.
 - Do not use difficult, formal, technical, or complicated words.
-- Title MUST start with "Hello {user_name}".
+- Title MUST start with "Hello {user_name},".
 - Title MUST include the user's name.
-- Title MUST NOT be only "Hello {user_name}".
+- Title MUST NOT be only "Hello {user_name},".
 - Keep the title short and meaningful.
 - Add a short motivational or useful phrase after the user's name.
 - Description must be short, clear, and actionable.
