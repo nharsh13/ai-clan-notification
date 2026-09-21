@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(dotenv_path=".env")
 
 
 class ConfigurationError(ValueError):
