@@ -144,29 +144,14 @@ class NotificationService:
                     "context": "your recent responses and workplace reflections",
                 }
             selection_type = eligible_responses[0].get("selection_type", "NEW")
-            if selection_type == "REUSED":
-                logger.info("No unused Q&A available.")
             for response in eligible_responses:
                 logger.info(
-                    "User ID: %s\n"
-                    "Selected Question ID: %s\n"
-                    "Selected Question: %s\n"
-                    "Selected Answer ID: %s\n"
-                    "Selected Answer: %s\n"
-                    "Selection Type: %s",
+                    "Q&A selected user_id=%s question_id=%s answer_id=%s type=%s",
                     response["user_id"],
                     response["question_id"],
-                    response["question"],
                     response["answer_id"],
-                    response["answer"],
                     selection_type,
                 )
-                if selection_type == "REUSED":
-                    logger.info(
-                        "Reusing previous Question ID: %s\nAnswer ID: %s",
-                        response["question_id"],
-                        response["answer_id"],
-                    )
             prepared_qa = prepare_user_qa(
                 request.user_id,
                 self.db_engine,
@@ -239,26 +224,12 @@ class NotificationService:
         selected_response = eligible_responses[0]
         selection_type = selected_response.get("selection_type", "NEW")
         logger.info(
-            "User ID: %s\n"
-            "Selected Question ID: %s\n"
-            "Selected Question: %s\n"
-            "Selected Answer ID: %s\n"
-            "Selected Answer: %s\n"
-            "Selection Type: %s",
+            "Q&A selected user_id=%s question_id=%s answer_id=%s type=%s",
             selected_response["user_id"],
             selected_response["question_id"],
-            selected_response["question"],
             selected_response["answer_id"],
-            selected_response["answer"],
             selection_type,
         )
-        if selection_type == "REUSED":
-            logger.info("No unused Q&A available.")
-            logger.info(
-                "Reusing previous Question ID: %s\nAnswer ID: %s",
-                selected_response["question_id"],
-                selected_response["answer_id"],
-            )
 
         return {
             "user_id": user_id,

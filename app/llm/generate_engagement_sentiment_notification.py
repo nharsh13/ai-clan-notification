@@ -15,102 +15,55 @@ def build_engagement_sentiment_notification_prompt(
     Build the prompt for one personalized CLAN engagement notification.
     """
 
-    questions_sent = response_data.get("questions_sent", 0)
-    questions_answered = response_data.get("questions_answered", 0)
-    response_percentage = response_data.get("response_percentage", 0)
     notification_type = response_data.get(
         "notification_type",
         "IMPROVEMENT",
     )
 
     return f"""
-You are generating ONE personalized CLAN engagement notification.
+Generate ONE personalized CLAN mobile notification.
 
-User name: {user_name}
-Notification language: {language}
-Questions sent: {questions_sent}
-Questions answered: {questions_answered}
-Response percentage: {response_percentage}%
-Notification type: {notification_type}
-
-Your goal:
-Create a short, friendly notification that encourages the user to stay engaged with CLAN.
+User: {user_name}
+Language: {language}
+Type: {notification_type}
 
 Rules:
+- Write directly in the requested language.
+- Use simple, friendly, everyday language.
+- Keep the title short, meaningful, and encouraging.
+- The title MUST include the user's name.
+- The title MUST NOT be only "Hello {user_name}".
 
-1. Generate EXACTLY ONE notification.
-2. Write the notification directly in the requested language.
-3. Use very simple, everyday language.
-4. Write like a mobile app notification.
-5. Keep the title short, interesting, and meaningful.
-6. The title MUST include the user's name.
-7. The title MUST NOT be only "Hello {user_name}".
-8. The title should contain a short motivational or encouraging phrase.
+For IMPROVEMENT:
+- Encourage the user to participate more in CLAN.
+- Encourage the user to answer CLAN questions.
+- Keep the message positive.
 
-9. If notification_type is "IMPROVEMENT":
-   - Encourage the user to participate more in CLAN.
-   - Encourage the user to answer more CLAN questions.
-   - Keep the message positive.
-   - Use an encouraging title such as:
-     - "Hello {user_name}, Let's Stay Engaged"
-     - "Hello {user_name}, Your Voice Matters"
-     - "Hello {user_name}, Let's Keep Growing"
-     - "Hello {user_name}, Keep Taking Part"
-     - "Hello {user_name}, Let's Keep Moving"
-     - "Hello {user_name}, Keep Building"
-     - "Hello {user_name}, Stay Connected"
-     - "Hello {user_name}, Keep Going"
+For POSITIVE:
+- Appreciate the user's CLAN participation.
+- Encourage the user to continue participating.
 
-10. If notification_type is "POSITIVE":
-    - Appreciate the user's CLAN participation.
-    - Encourage the user to continue participating.
-    - Use a positive title such as:
-      - "Hello {user_name}, Great Progress"
-      - "Hello {user_name}, Great Work"
-      - "Hello {user_name}, Keep Learning"
-      - "Hello {user_name}, Keep Growing"
-      - "Hello {user_name}, Keep It Going"
-      - "Hello {user_name}, You're Doing Great"
-      - "Hello {user_name}, Keep Taking Part"
+Do not:
+- Mention response percentage.
+- Mention question counts.
+- Mention individual questions.
+- Shame, blame, or criticize the user.
+- Use words such as bad, poor, lazy, weak, or failure.
+- Use difficult, formal, technical, or complicated language.
+- Make unsupported claims.
 
-11. Do NOT show the response percentage.
-12. Do NOT show the number of questions sent or answered.
-13. Do NOT mention individual questions.
-14. Do NOT shame, blame, or criticize the user.
-15. Do NOT use words such as:
-    "bad", "poor", "lazy", "weak", "failure",
-    or similar negative words.
-16. Do NOT use difficult, formal, technical, or complicated words.
-17. Do NOT make claims that are not supported by the input.
-18. Keep the description short, clear, and actionable.
-19. The description should tell the user what they can do next.
-20. Return ONLY valid JSON.
-21. Return exactly two fields:
-    "title"
-    "description"
-22. Do NOT return Markdown, explanations, or any extra text.
+The description must be short, clear, and actionable.
 
-Example for IMPROVEMENT:
-
-{{
-    "title": "Hello {user_name}, Let's Stay Engaged",
-    "description": "Answer more CLAN questions and keep learning."
-}}
-
-Example for POSITIVE:
-
-{{
-    "title": "Hello {user_name}, Great Progress",
-    "description": "Keep taking part in CLAN and continue learning."
-}}
-
-Return ONLY:
-
+Return ONLY valid JSON with exactly these two fields:
 {{
     "title": "string",
     "description": "string"
 }}
-"""
+
+No Markdown.
+No explanation.
+No additional fields.
+""".strip()
 
 
 def generate_engagement_sentiment_notification(
@@ -162,32 +115,15 @@ def validate_engagement_sentiment_notification(
             "Engagement sentiment notification must be a JSON object."
         )
 
-    if "title" not in notification:
+    title = notification.get("title")
+    description = notification.get("description")
+
+    if not isinstance(title, str) or not title.strip():
         raise ValueError(
-            "Engagement sentiment notification title is missing."
+            "Engagement sentiment notification title must be a non-empty string."
         )
 
-    if "description" not in notification:
+    if not isinstance(description, str) or not description.strip():
         raise ValueError(
-            "Engagement sentiment notification description is missing."
-        )
-
-    if not isinstance(notification["title"], str):
-        raise ValueError(
-            "Engagement sentiment notification title must be a string."
-        )
-
-    if not isinstance(notification["description"], str):
-        raise ValueError(
-            "Engagement sentiment notification description must be a string."
-        )
-
-    if not notification["title"].strip():
-        raise ValueError(
-            "Engagement sentiment notification title is empty."
-        )
-
-    if not notification["description"].strip():
-        raise ValueError(
-            "Engagement sentiment notification description is empty."
+            "Engagement sentiment notification description must be a non-empty string."
         )

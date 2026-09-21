@@ -14,6 +14,9 @@ from app.notifications.sender import NotificationSender
 from app.notifications.service import NotificationService
 from scripts.apscheduler_runner import shutdown_scheduler, start_scheduler
 
+for noisy_logger_name in ("httpx", "httpx2", "huggingface_hub", "sentence_transformers"):
+    logging.getLogger(noisy_logger_name).setLevel(logging.WARNING)
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     try:

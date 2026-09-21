@@ -47,11 +47,11 @@ def _generate_with_retry(client, model: str, prompt: str) -> Any:
                 raise
             delay = RETRY_BACKOFF_SECONDS[attempt]
             logger.warning(
-                "Temporary OpenAI error; retrying in %ss (attempt %s/%s): %s",
+                "Temporary OpenAI error; retrying in %ss (attempt %s/%s) error_type=%s",
                 delay,
                 attempt + 1,
                 MAX_RETRIES,
-                error,
+                type(error).__name__,
             )
             time.sleep(delay)
 
@@ -68,7 +68,7 @@ def _parse_json_response(content: str) -> dict:
     try:
         return json.loads(content)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"LLM returned invalid JSON: {content}") from exc
+        raise ValueError("LLM returned invalid JSON") from exc
 
 
 def generate_engagement_sentiment_notification(

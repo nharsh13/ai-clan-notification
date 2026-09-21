@@ -13,87 +13,74 @@ def build_performance_notification_prompt(
     weakest_kii: dict,
     video: dict,
 ) -> str:
-    """Build a simple personalized video recommendation notification."""
+    """Build a short personalized AI-CLAN video recommendation prompt."""
+
+    kii_name = weakest_kii.get("kii_name", "performance area")
+    video_title = video.get("title") or "learning video"
 
     return f"""
 Generate ONE personalized AI-CLAN video notification.
 
-User name: {user_name}
-Notification language: {language}
-Weakest KII: {weakest_kii.get('kii_name', 'performance area')}
-Selected video title: {video.get('title') or 'Untitled learning video'}
+User: {user_name}
+Language: {language}
+Area to improve: {kii_name}
+Video: {video_title}
 
 Rules:
+- Write directly in the requested language.
+- Use simple, friendly, everyday language.
+- Keep the notification short, positive, and motivating.
+- Title MUST start with "Hello {user_name}".
+- Keep the title short.
+- Do NOT include the KII name or video title in the title.
+- Mention the improvement area in the description.
+- Encourage the user to watch the selected video.
+- Do NOT mention performance percentages.
+- Do NOT mention monthly, daily, or seven-day targets.
+- Do NOT use difficult, formal, or technical language.
+- Do NOT make negative or discouraging statements.
+- Do NOT invent information about the video or its benefits.
+- Mention only the provided improvement area.
+- Return exactly two fields: "title" and "description".
+- Return ONLY valid JSON.
+- Do not return Markdown, explanations, or additional fields.
 
-1. Write the notification in the requested language.
-2. Use very simple words that are easy for any app user to understand.
-3. Keep the notification short, clear, positive, and motivating.
-4. The title must start with "Hello {user_name}".
-5. Keep the title very short.
-6. Do NOT include the KII name in the title.
-7. Do NOT include the video title in the title.
-8. Use a simple, meaningful, and attractive motivational title such as:
-   - "Hello {user_name}, You Can Do Better"
-   - "Hello {user_name}, Let's Get Better"
-   - "Hello {user_name}, Take the Next Step"
-   - "Hello {user_name}, Keep Moving Forward"
-   - "Hello {user_name}, Grow Your Skills"
-   - "Hello {user_name}, Learn and Grow"
-   - "Hello {user_name}, Let's Level Up"
-   - "Hello {user_name}, Your Next Step"
-   - "Hello {user_name}, Keep Improving"
-   - "Hello {user_name}, Time to Grow"
-9. In the description, mention the weakest KII as an area the user can improve.
-10. Encourage the user to watch the selected video.
-11. Do NOT mention the exact performance percentage.
-12. Do NOT mention monthly target, daily target, or seven-day target.
-13. Do NOT use difficult, formal, or complicated words.
-14. Do NOT make negative or discouraging statements.
-15. Do NOT invent information about the video or what the user will achieve from it.
-16. Do NOT mention any KII other than the weakest KII.
-17. Do NOT generate user_id, notification_type, reference_id, video_popup,
-    image, success, action, or any other fields.
-18. Return ONLY valid JSON.
-19. Return exactly two fields: "title" and "description".
-
-Example output:
-
+Example:
 {{
-    "title": "Hello Veera, Let's Get Better",
-    "description": "Channel Partner Empanelled is an area you can improve. Watch this video to learn and grow."
+    "title": "Hello {user_name}, Let's Get Better",
+    "description": "{kii_name} is an area you can improve. Watch this video to learn and grow."
 }}
-"""
+""".strip()
 
 
-def validate_performance_notification(notification: dict) -> None:
+def validate_performance_notification(
+    notification: dict,
+) -> None:
     """Validate the performance notification output."""
 
     if not isinstance(notification, dict):
-        raise ValueError("Performance notification must be a JSON object.")
+        raise ValueError(
+            "Performance notification must be a JSON object."
+        )
 
-    if "title" not in notification:
-        raise ValueError("Performance notification title is missing.")
+    title = notification.get("title")
+    description = notification.get("description")
 
-    if "description" not in notification:
-        raise ValueError("Performance notification description is missing.")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError(
+            "Performance notification title must be a non-empty string."
+        )
 
-    if (
-        not isinstance(notification["title"], str)
-        or not notification["title"].strip()
-    ):
-        raise ValueError("Performance notification title is empty.")
-
-    if (
-        not isinstance(notification["description"], str)
-        or not notification["description"].strip()
-    ):
-        raise ValueError("Performance notification description is empty.")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError(
+            "Performance notification description must be a non-empty string."
+        )
 
     action = notification.get("action", "Watch now")
 
     if not isinstance(action, str) or not action.strip():
         raise ValueError(
-            "Performance notification action must be a non-empty string"
+            "Performance notification action must be a non-empty string."
         )
 
 
@@ -103,7 +90,7 @@ def generate_performance_notification(
     weakest_kii: dict,
     video: dict,
 ) -> dict:
-    """Generate the performance recommendation notification using the configured LLM."""
+    """Generate the performance recommendation notification."""
 
     client = _get_openai_client()
 
@@ -114,7 +101,11 @@ def generate_performance_notification(
         video=video,
     )
 
-    response = _generate_with_retry(client, MODEL, prompt)
+    response = _generate_with_retry(
+        client,
+        MODEL,
+        prompt,
+    )
 
     notification = _parse_json_response(
         response.output_text.strip()

@@ -19,83 +19,49 @@ def build_qa_sentiment_notification_prompt(
 
     qa_json = json.dumps(
         prepared_qa,
-        indent=2,
         ensure_ascii=False,
     )
 
     return f"""
-You are generating ONE personalized CLAN learning notification.
+Generate ONE personalized CLAN learning notification.
 
-User name:
-{user_name}
+User: {user_name}
+Language: {language}
 
-Notification language:
-{language}
-
-User's answered CLAN questions and responses:
+Answered CLAN questions and responses:
 {qa_json}
 
-Instructions:
+Requirements:
+- Analyze ALL answers together.
+- Identify ONE useful learning or improvement area.
+- Give ONE simple, positive suggestion based on that area.
+- Encourage the user to apply the learning in their work.
+- Do not generate one notification per question.
+- Do not directly repeat questions or answers.
+- Do not say the user's answer is wrong or bad.
+- Do not shame, blame, or criticize the user.
+- Use simple, friendly, everyday language.
+- Write like a short mobile app notification.
+- Do not use difficult, formal, technical, or complicated words.
+- Title MUST start with "Hello {user_name}".
+- Title MUST include the user's name.
+- Title MUST NOT be only "Hello {user_name}".
+- Keep the title short and meaningful.
+- Add a short motivational or useful phrase after the user's name.
+- Description must be short, clear, and actionable.
+- Give only ONE useful direction.
+- Write directly in the requested language.
+- Do not invent facts about the user.
+- Do not make claims unsupported by the provided answers.
 
-1. Generate EXACTLY ONE notification.
-2. Analyze ALL of the user's answers together.
-3. Identify one useful learning or improvement area from the answers.
-4. Give the user one simple and positive suggestion based on that area.
-5. Encourage the user to use this learning in their work.
-6. Do NOT generate one notification for each question.
-7. Do NOT directly repeat the question.
-8. Do NOT directly repeat the user's answer.
-9. Do NOT say that the user's answer is wrong or bad.
-10. Do NOT shame, blame, or criticize the user.
-11. Use very simple, everyday language.
-12. Write like a short mobile app notification.
-13. Do NOT use difficult, formal, technical, or complicated words.
-14. The user's name MUST appear in the title.
-15. The title MUST start with "Hello {user_name}".
-16. The title must be short and meaningful.
-17. Do NOT make the title only "Hello {user_name}".
-18. Add a short motivational, encouraging, or useful phrase after the user's name.
-19. Keep the description short and clear.
-20. The description should give ONE simple and useful direction.
-21. Generate the notification directly in the requested language.
-22. Do NOT invent facts about the user.
-23. Do NOT make claims that cannot be understood from the provided answers.
-24. Return ONLY valid JSON.
-25. Return exactly two fields:
-    "title"
-    "description"
-26. Do NOT return Markdown, explanations, or any extra text.
-
-For the title, use a natural and meaningful phrase such as:
-
-- "Hello {user_name}, Keep Learning"
-- "Hello {user_name}, Let's Grow"
-- "Hello {user_name}, Keep Improving"
-- "Hello {user_name}, Learn and Grow"
-- "Hello {user_name}, Take the Next Step"
-- "Hello {user_name}, Keep Moving Forward"
-- "Hello {user_name}, Build Your Skills"
-- "Hello {user_name}, Let's Get Better"
-- "Hello {user_name}, Keep Growing"
-- "Hello {user_name}, Your Next Step"
-
-Choose ONE title that fits the learning area identified from the user's answers.
-Do NOT always use the same title.
-
-Example:
-
-{{
-    "title": "Hello {user_name}, Take the Next Step",
-    "description": "Keep building your understanding and use what you learn in your work."
-}}
-
-Return ONLY:
-
+Return ONLY valid JSON with exactly these two fields:
 {{
     "title": "string",
     "description": "string"
 }}
-"""
+
+Do not return Markdown, explanations, or additional fields.
+""".strip()
 
 
 def generate_qa_sentiment_notification(
@@ -121,9 +87,9 @@ def generate_qa_sentiment_notification(
         prompt,
     )
 
-    content = response.output_text.strip()
-
-    notification = _parse_json_response(content)
+    notification = _parse_json_response(
+        response.output_text.strip()
+    )
 
     validate_qa_sentiment_notification(notification)
 
@@ -142,32 +108,15 @@ def validate_qa_sentiment_notification(
             "Q/A sentiment notification must be a JSON object."
         )
 
-    if "title" not in notification:
+    title = notification.get("title")
+    description = notification.get("description")
+
+    if not isinstance(title, str) or not title.strip():
         raise ValueError(
-            "Q/A sentiment notification title is missing."
+            "Q/A sentiment notification title must be a non-empty string."
         )
 
-    if "description" not in notification:
+    if not isinstance(description, str) or not description.strip():
         raise ValueError(
-            "Q/A sentiment notification description is missing."
-        )
-
-    if not isinstance(notification["title"], str):
-        raise ValueError(
-            "Q/A sentiment notification title must be a string."
-        )
-
-    if not isinstance(notification["description"], str):
-        raise ValueError(
-            "Q/A sentiment notification description must be a string."
-        )
-
-    if not notification["title"].strip():
-        raise ValueError(
-            "Q/A sentiment notification title is empty."
-        )
-
-    if not notification["description"].strip():
-        raise ValueError(
-            "Q/A sentiment notification description is empty."
+            "Q/A sentiment notification description must be a non-empty string."
         )
