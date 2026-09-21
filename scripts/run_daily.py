@@ -1,6 +1,7 @@
 import logging
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -16,70 +17,113 @@ from app.notifications.service import NotificationService
 
 logging.basicConfig(level=logging.INFO)
 SCHEDULER_LOCK_KEY = 781234567
+SCHEDULER_TIMEZONE = ZoneInfo("Asia/Kolkata")
+logger = logging.getLogger(__name__)
 
 def main() -> None:
+    started_at = datetime.now(SCHEDULER_TIMEZONE)
+    processed_count = 0
+    failed_count = 0
+    skipped_count = 0
+    logger.info("[JOB] Job STARTED")
+    logger.info("[JOB] Start timestamp in IST: %s", started_at.isoformat())
     service = NotificationService()
-    with engine.connect() as lock_connection:
-        acquired = lock_connection.execute(
-            text("SELECT pg_try_advisory_lock(:lock_key)"),
-            {"lock_key": SCHEDULER_LOCK_KEY},
-        ).scalar()
-        if not acquired:
-            logging.getLogger(__name__).info("Another scheduler is already running; exiting")
-            return
-
-        try:
-            with engine.connect() as connection:
-                user_ids = [
-                    row[0]
-                    for row in connection.execute(
-                        text(
-                            '''
-                            SELECT id
-                            FROM public."user"
-                            WHERE account_id = 14
-                              AND status = 1
-                              AND debug = false
-                              AND user_type_id = 1
-                            '''
-                        )
-                    )
-                ]
-
-            for user_id in user_ids:
-                event_type = get_next_notification_for_user(user_id, db_engine=engine)
-                if event_type is None:
-                    continue
-
-                if has_notification_for_user_on_date(user_id, event_type, db_engine=engine):
-                    continue
-
-                flow = FLOW_BY_EVENT_TYPE[event_type]
-                try:
-                    result = service.build_notification(NotificationRequest(user_id=user_id, flow=flow))
-                    if result is None:
-                        continue
-                    if result.remote_send_status == "failed":
-                        logging.getLogger(__name__).error("Notification failed for user=%s flow=%s", user_id, flow)
-                        continue
-
-                    insert_notification(
-                        target_user_id=user_id,
-                        event_type=event_type,
-                        title=result.notification_title,
-                        description=result.notification_body,
-                        event_ref_id=result.reference_id,
-                        event_details=result.model_dump(exclude_none=True),
-                        created_at=datetime.now(timezone.utc),
-                        db_engine=engine,
-                    )
-                except Exception:
-                    logging.getLogger(__name__).exception("Notification failed for user=%s flow=%s", user_id, flow)
-        finally:
-            lock_connection.execute(
-                text("SELECT pg_advisory_unlock(:lock_key)"),
+    try:
+        with engine.connect() as lock_connection:
+            acquired = lock_connection.execute(
+                text("SELECT pg_try_advisory_lock(:lock_key)"),
                 {"lock_key": SCHEDULER_LOCK_KEY},
-            )
+            ).scalar()
+            if not acquired:
+                skipped_count += 1
+                logger.info("[SKIP] Scheduler job skipped: another scheduler is already running")
+                return
+
+            try:
+                with engine.connect() as connection:
+                    user_ids = [
+                        row[0]
+                        for row in connection.execute(
+                            text(
+                                '''
+                                SELECT id
+                                FROM public."user"
+                                WHERE account_id = 14
+                                  AND status = 1
+                                  AND debug = false
+                                  AND user_type_id = 1
+                                '''
+                            )
+                        )
+                    ]
+
+                logger.info("[JOB] Total eligible users fetched: %d", len(user_ids))
+                for user_id in user_ids:
+                    logger.info("[USER] Current user ID=%s name=unavailable", user_id)
+                    logger.info("[USER] Campaign day: not calculated by existing job")
+                    event_type = get_next_notification_for_user(user_id, db_engine=engine)
+                    if event_type is None:
+                        skipped_count += 1
+                        logger.info("[SKIP] user_id=%s reason=no eligible notification", user_id)
+                        continue
+
+                    if has_notification_for_user_on_date(user_id, event_type, db_engine=engine):
+                        skipped_count += 1
+                        logger.info("[SKIP] user_id=%s reason=notification already exists for today", user_id)
+                        continue
+
+                    flow = FLOW_BY_EVENT_TYPE[event_type]
+                    try:
+                        result = service.build_notification(NotificationRequest(user_id=user_id, flow=flow))
+                        if result is None:
+                            skipped_count += 1
+                            logger.info("[SKIP] user_id=%s reason=no notification generated", user_id)
+                            continue
+                        if result.remote_send_status == "failed":
+                            failed_count += 1
+                            logger.error(
+                                "[ERROR] Failed notification user_id=%s flow=%s error=%s",
+                                user_id,
+                                flow,
+                                result.error or "unknown send failure",
+                            )
+                            continue
+
+                        insert_notification(
+                            target_user_id=user_id,
+                            event_type=event_type,
+                            title=result.notification_title,
+                            description=result.notification_body,
+                            event_ref_id=result.reference_id,
+                            event_details=result.model_dump(exclude_none=True),
+                            created_at=datetime.now(timezone.utc),
+                            db_engine=engine,
+                        )
+                        processed_count += 1
+                        logger.info("[SUCCESS] Notification processed successfully user_id=%s flow=%s", user_id, flow)
+                    except Exception as exc:
+                        failed_count += 1
+                        logger.exception("[ERROR] Failed notification user_id=%s flow=%s error=%s", user_id, flow, exc)
+            finally:
+                lock_connection.execute(
+                    text("SELECT pg_advisory_unlock(:lock_key)"),
+                    {"lock_key": SCHEDULER_LOCK_KEY},
+                )
+    except Exception:
+        logger.exception("[ERROR] Unexpected job exception")
+        raise
+    finally:
+        ended_at = datetime.now(SCHEDULER_TIMEZONE)
+        logger.info("[JOB] Job ENDED")
+        logger.info("[JOB] End timestamp in IST: %s", ended_at.isoformat())
+        logger.info("[JOB] Total execution duration: %s", ended_at - started_at)
+        logger.info(
+            "[JOB] Overall completion status: %s (successful=%d skipped=%d failed=%d)",
+            "COMPLETED" if failed_count == 0 else "COMPLETED_WITH_ERRORS",
+            processed_count,
+            skipped_count,
+            failed_count,
+        )
 
 
 if __name__ == "__main__":

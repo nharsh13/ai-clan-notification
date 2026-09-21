@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 from threading import Event, Lock
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -67,6 +68,17 @@ def start_scheduler() -> BackgroundScheduler:
 			_scheduler = create_scheduler()
 		if not _scheduler.running:
 			_scheduler.start()
+			job = (
+				_scheduler.get_job("daily_notification_scheduler")
+				if hasattr(_scheduler, "get_job")
+				else None
+			)
+			logger.info("[SCHEDULER] Scheduler status: STARTED")
+			logger.info("[SCHEDULER] Current date/time in IST: %s", datetime.now(SCHEDULER_TIMEZONE).isoformat())
+			logger.info("[SCHEDULER] Configured schedule: %s", job.trigger if job else "unavailable")
+			logger.info("[SCHEDULER] Job ID: daily_notification_scheduler")
+			logger.info("[SCHEDULER] Exact next scheduled run time: %s", job.next_run_time if job else "unavailable")
+			logger.info("[SCHEDULER] Status: RUNNING")
 		return _scheduler
 
 
@@ -75,6 +87,8 @@ def shutdown_scheduler() -> None:
 	with _scheduler_lock:
 		if _scheduler is not None and _scheduler.running:
 			_scheduler.shutdown(wait=True)
+			logger.info("[SCHEDULER] Scheduler STOPPED")
+			logger.info("[SCHEDULER] Shutdown completed")
 		_scheduler = None
 
 
@@ -87,11 +101,25 @@ def main() -> None:
 		config.minute,
 	)
 	scheduler = create_scheduler(config)
-	scheduler.start()
 	try:
+		scheduler.start()
+		job = scheduler.get_job("daily_notification_scheduler")
+		logger.info("[SCHEDULER] Scheduler status: STARTED")
+		logger.info("[SCHEDULER] Current date/time in IST: %s", datetime.now(SCHEDULER_TIMEZONE).isoformat())
+		logger.info("[SCHEDULER] Configured schedule: daily at %02d:%02d IST", config.hour, config.minute)
+		logger.info("[SCHEDULER] Job ID: daily_notification_scheduler")
+		logger.info("[SCHEDULER] Exact next scheduled run time: %s", job.next_run_time if job else "unavailable")
+		logger.info("[SCHEDULER] Status: RUNNING")
 		Event().wait()
+	except KeyboardInterrupt:
+		logger.info("[SCHEDULER] Ctrl+C received; stopping scheduler")
+	except Exception:
+		logger.exception("[ERROR] Unexpected scheduler exception")
+		raise
 	finally:
 		scheduler.shutdown(wait=True)
+		logger.info("[SCHEDULER] Scheduler STOPPED")
+		logger.info("[SCHEDULER] Shutdown completed")
 
 
 if __name__ == "__main__":
