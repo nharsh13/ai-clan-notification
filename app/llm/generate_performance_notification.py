@@ -32,6 +32,7 @@ Rules:
 - Keep the notification short, positive, and motivating.
 - Title MUST start with "Hello {user_name}".
 - Keep the title short.
+- Ensure the title and description are grammatically correct and natural in the requested language.
 - Do NOT include the KII name or video title in the title.
 - Mention the improvement area in the description.
 - Encourage the user to watch the selected video.

@@ -33,6 +33,7 @@ Rules:
 - Keep the title short, meaningful, and encouraging.
 - The title MUST include the user's name.
 - The title MUST NOT be only "Hello {user_name}".
+- Ensure the title and description are grammatically correct and natural in the requested language.
 
 For IMPROVEMENT:
 - Encourage the user to participate more in CLAN.

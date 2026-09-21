@@ -74,6 +74,11 @@ def send_notification(request: NotificationSendRequest):
             flow=flow,
         )
         result = service.build_notification(pipeline_request)
+        if result is None:
+            raise HTTPException(
+                status_code=500,
+                detail="Notification could not be generated",
+            )
         if result.remote_send_status == "failed":
             raise HTTPException(status_code=502, detail=result.error or "Remote notification send failed")
         if pipeline_request.should_send and result.remote_send_status == "skipped":

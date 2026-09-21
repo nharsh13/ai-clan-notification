@@ -37,6 +37,7 @@ Requirements:
 - Give ONE simple, positive suggestion based on that area.
 - Encourage the user to apply the learning in their work.
 - Do not generate one notification per question.
+- Ensure the title and description are grammatically correct and natural in the requested language.
 - Do not directly repeat questions or answers.
 - Do not say the user's answer is wrong or bad.
 - Do not shame, blame, or criticize the user.
