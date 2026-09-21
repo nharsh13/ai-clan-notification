@@ -1,8 +1,24 @@
+# Secrets and local config
 .env
+.env.*
+
+# VCS and editor files
 .git
+.gitignore
+.idea
+.vscode
+
+# Python artifacts
+**/__pycache__
+**/*.pyc
 .pytest_cache
-logs
-tests
 venv
-__pycache__
-*.pyc
+.venv
+
+# Not needed in the image
+tests
+logs
+requirements-dev.txt
+Dockerfile
+.dockerignore
+*.md
