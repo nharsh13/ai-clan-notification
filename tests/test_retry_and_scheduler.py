@@ -334,8 +334,8 @@ def test_scheduler_continues_after_one_user_failure(monkeypatch):
 
     class FakeResult:
         remote_send_status = "sent"
-        notification_title = "Title"
-        notification_body = "Body"
+        title = "Title"
+        description = "Body"
         reference_id = 10
 
         def model_dump(self, exclude_none=True):

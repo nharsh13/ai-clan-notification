@@ -1,51 +1,62 @@
-from app.notifications.models import FlowName, Notification
+
+from app.notifications.models import Notification
 
 
 class NotificationEngine:
-    """Build AI-CLAN notification payloads without the 30-Day campaign YAML dependency."""
+    """Build AI-CLAN notification payloads."""
 
     def __init__(self):
         self.config = {}
-
-    @staticmethod
-    def _normalize_flow(flow: str) -> FlowName:
-        normalized = str(flow).strip().lower()
-        if normalized in {"performance", "engagement", "sentiment"}:
-            return normalized  # type: ignore[return-value]
-        return "performance"
 
     def make_notification(
         self,
         *,
         user_id: int,
-        flow: str,
         notification_type: str,
         title: str,
-        description: str,
-        reference_id: int | None = None,
-        deep_link: str | None = None,
-        video_id: int | None = None,
-        video_title: str | None = None,
-        creator_name: str | None = None,
-        action: str = "Watch now",
-        should_send: bool = True,
+        description: str | None = None,
+        reference_id: int = 0,
         video_popup: bool | None = None,
+        image: str | None = None,
     ) -> Notification:
-        normalized_flow = self._normalize_flow(flow)
+        """
+        Build a notification using the current AI-CLAN notification contract.
+
+        Parameters:
+            user_id:
+                ID of the user receiving the notification.
+
+            notification_type:
+                Type of notification, for example:
+                PERFORMANCE, SENTIMENT_QA, SENTIMENT_ENGAGEMENT.
+
+            title:
+                Notification title.
+
+            description:
+                Notification description/body.
+
+            reference_id:
+                ID related to the notification.
+                Defaults to 0 when there is no reference.
+
+            video_popup:
+                Whether the notification should open/show a video popup.
+
+            image:
+                Optional notification image URL/path.
+
+        Returns:
+            Notification:
+                A validated notification payload.
+        """
+
         return Notification(
             user_id=user_id,
-            flow=normalized_flow,
-            notification_title=title,
-            notification_body=description,
+            title=title,
+            description=description,
             notification_type=notification_type,
-            should_send=should_send,
             reference_id=reference_id,
-            deep_link=deep_link,
-            video_id=video_id,
-            video_title=video_title,
-            creator_name=creator_name,
             video_popup=video_popup,
-            audience_strategy="dynamic",
-            cohort_key="ai_clan",
-            action=action,
+            image=image,
         )

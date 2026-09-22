@@ -5,6 +5,7 @@ import logging
 
 from app.config import OPENAI_API_KEY
 from app.database.connection import engine
+from app.database.notification_repository import get_next_manual_notification_for_user
 from app.database.user_repository import get_user
 from app.llm.generate_engagement_sentiment_notification import (
     build_engagement_sentiment_notification_prompt,
@@ -19,6 +20,7 @@ from app.llm.llm_client import NotificationGenerator
 from app.notifications.engine import NotificationEngine
 from app.notifications.models import NotificationProcessingResult, NotificationRequest
 from app.notifications.sender import NotificationSender
+from app.constants import FLOW_BY_EVENT_TYPE
 from app.performance.performance import calculate_performance
 from app.recommendation.recommendation import embed_text, recommend_video
 from app.sentiment.sentiment import (
@@ -114,28 +116,29 @@ class NotificationService:
 
     def _build_flow_context(
         self,
-        request: NotificationRequest,
+        user_id: int,
+        flow: str,
     ) -> tuple[str, dict[str, Any]] | None:
         profile = self._get_user_profile(
-            request.user_id,
-            require_video_language=request.flow == "performance",
+            user_id,
+            require_video_language=flow == "performance",
         )
-        user_name = str(profile["user_name"]).strip() or f"User {request.user_id}"
+        user_name = str(profile["user_name"]).strip() or f"User {user_id}"
         language = str(profile["app_language_code"]).strip()
-        if request.flow == "performance" and not profile["video_language_ids"]:
+        if flow == "performance" and not profile["video_language_ids"]:
             return None
-        if request.flow == "engagement":
-            response_data = get_user_response_rate(request.user_id)
+        if flow == "engagement":
+            response_data = get_user_response_rate(user_id)
             if not response_data or response_data["questions_sent"] == 0:
                 return None
             return user_name, {
-                "user_id": request.user_id,
+                "user_id": user_id,
                 "language": language,
                 "response_data": response_data,
                 "context": "your CLAN participation",
             }
-        if request.flow == "sentiment":
-            eligible_responses = get_eligible_user_qa(request.user_id, self.db_engine)
+        if flow == "sentiment":
+            eligible_responses = get_eligible_user_qa(user_id, self.db_engine)
             if not eligible_responses:
                 return user_name, {
                     "language": language,
@@ -153,12 +156,12 @@ class NotificationService:
                     selection_type,
                 )
             prepared_qa = prepare_user_qa(
-                request.user_id,
+                user_id,
                 self.db_engine,
                 rows=eligible_responses,
             )
             return user_name, {
-                "user_id": request.user_id,
+                "user_id": user_id,
                 "language": language,
                 "prepared_qa": prepared_qa,
                 "history_records": eligible_responses,
@@ -166,10 +169,10 @@ class NotificationService:
             }
 
         # Performance calculation and video retrieval remain separate concerns.
-        calc = calculate_performance(request.user_id)
+        calc = calculate_performance(user_id)
         weakest = calc.get("improvement_area")
         if not weakest:
-            raise ValueError(f"No weakest KII found for user: {request.user_id}")
+            raise ValueError(f"No weakest KII found for user: {user_id}")
         language_id = profile.get("video_language_ids")
         performance = type(
             "PerformanceContext",
@@ -181,13 +184,13 @@ class NotificationService:
             language_id,
             embed_text,
             self.db_engine,
-            user_id=request.user_id,
+            user_id=user_id,
         )
         if recommendation is None:
             return None
 
         return user_name, {
-            "user_id": request.user_id,
+            "user_id": user_id,
             "language": language,
             "weakest_kii": weakest,
             "video": recommendation,
@@ -243,106 +246,89 @@ class NotificationService:
 
     def build_notification(
         self,
-        request: NotificationRequest,
+        user_id: NotificationRequest | int,
+        *,
+        flow: str | None = None,
+        should_send: bool | None = None,
     ) -> NotificationProcessingResult | None:
-        if request.user_id <= 0:
+        if isinstance(user_id, NotificationRequest):
+            request = user_id
+            user_id = request.user_id
+            flow = flow or request.flow
+            should_send = request.should_send if should_send is None else should_send
+        else:
+            should_send = True if should_send is None else should_send
+
+        if user_id <= 0:
             raise ValueError("user_id must be greater than zero")
 
-        if request.notification_type:
-            notification_type = request.notification_type
-        elif request.flow == "performance":
-            notification_type = "VIDEO_RECOMMENDATION"
-        elif request.flow == "engagement":
-            notification_type = "SENTIMENT_ENGAGEMENT"
-        elif request.flow == "sentiment":
-            notification_type = "SENTIMENT_QA"
-        else:
-            notification_type = "VIDEO_RECOMMENDATION"
+        if flow is None:
+            event_type = get_next_manual_notification_for_user(
+                user_id,
+                db_engine=self.db_engine,
+            )
+            flow = FLOW_BY_EVENT_TYPE[event_type]
 
-        flow_context = self._build_flow_context(request)
+        notification_type = {
+            "performance": "VIDEO_RECOMMENDATION",
+            "engagement": "SENTIMENT_ENGAGEMENT",
+            "sentiment": "SENTIMENT_QA",
+        }[flow]
+
+        flow_context = self._build_flow_context(user_id, flow)
         if flow_context is None:
             return None
         user_name, payload = flow_context
-        if request.flow == "sentiment" and not payload["history_records"]:
+        if flow == "sentiment" and not payload["history_records"]:
             return None
-        notification_data = self._generate_llm_notification(request.flow, user_name, payload)
+        notification_data = self._generate_llm_notification(flow, user_name, payload)
 
-        if request.flow == "performance":
+        if flow == "performance":
             video = payload["video"]
-            video_id = video["video_id"]
-            video_title = video.get("title")
-            creator_name_value = video.get("creator_name") or request.creator_name
-            creator_name = (
-                str(creator_name_value)
-                if creator_name_value is not None
-                else None
-            )
-            reference_id = video_id
+            reference_id = int(video["video_id"])
         else:
-            video_id = request.video_id or payload.get("video_id")
-            video_title = request.video_title or payload.get("video_title")
-            creator_name = request.creator_name
-            reference_id = request.reference_id or video_id
-        deep_link = request.deep_link
-        if request.flow == "performance" and video_id is not None and not deep_link:
-            from app.config import VIDEO_DEEP_LINK_TEMPLATE
-
-            deep_link = VIDEO_DEEP_LINK_TEMPLATE.format(video_id=video_id)
-        video_popup = request.video_popup
-        if request.flow == "performance" and video_popup is None:
-            video_popup = True
+            reference_id = 0
+        video_popup = True if flow == "performance" else None
 
         notification = self.engine.make_notification(
-            user_id=request.user_id,
-            flow=request.flow,
+            user_id=user_id,
             notification_type=notification_type,
             title=notification_data["title"],
             description=notification_data["description"],
             reference_id=reference_id,
-            deep_link=deep_link,
-            video_id=video_id,
-            video_title=video_title,
-            creator_name=creator_name,
-            action=notification_data.get("action", "Watch now"),
-            should_send=request.should_send,
             video_popup=video_popup,
         )
 
         response = NotificationProcessingResult(
-            user_id=request.user_id,
-            flow=request.flow,
-            notification_title=notification.notification_title,
-            notification_body=notification.notification_body,
-            audience_strategy=notification.audience_strategy,
-            cohort_key=notification.cohort_key,
-            action=notification.action,
-            deep_link=notification.deep_link,
+            user_id=notification.user_id,
+            title=notification.title,
+            description=notification.description,
             notification_type=notification.notification_type,
-            should_send=request.should_send,
             reference_id=notification.reference_id,
-            video_id=notification.video_id,
-            video_title=notification.video_title,
-            creator_name=notification.creator_name,
             video_popup=notification.video_popup,
+            image=notification.image,
+            flow=flow,
+            should_send=should_send,
         )
 
-        if request.should_send:
+        if should_send:
             if not self.sender.remote_url:
                 response.remote_send_status = "skipped"
                 response.error = "REMOTE_NOTIFICATION_SEND_URL is not configured"
             else:
                 try:
                     remote_response = self.sender.send(
-                        user_id=request.user_id,
-                        notification_type=notification.notification_type or notification_type,
-                        title=notification.notification_title,
-                        description=notification.notification_body,
-                        reference_id=int(notification.reference_id or 0),
-                        video_popup=notification.video_popup or False,
+                        user_id=notification.user_id,
+                        notification_type=notification.notification_type,
+                        title=notification.title,
+                        description=notification.description,
+                        reference_id=notification.reference_id,
+                        video_popup=notification.video_popup,
+                        image=notification.image,
                     )
                     response.remote_send_status = "sent"
                     response.remote_send_response = remote_response
-                    if request.flow == "sentiment":
+                    if flow == "sentiment":
                         save_sentiment_notification_history(
                             payload["history_records"],
                             self.db_engine,
@@ -350,8 +336,8 @@ class NotificationService:
                 except Exception as exc:  # pragma: no cover - defensive fallback
                     logger.exception(
                         "Notification send failed for user=%s flow=%s",
-                        request.user_id,
-                        request.flow,
+                        user_id,
+                        flow,
                     )
                     response.remote_send_status = "failed"
                     response.error = str(exc)

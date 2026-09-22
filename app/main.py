@@ -3,10 +3,7 @@ from fastapi import FastAPI, HTTPException, Query
 import logging
 
 from app.config import ConfigurationError, validate_configuration
-from app.constants import FLOW_BY_EVENT_TYPE
-from app.database.notification_repository import get_next_manual_notification_for_user
 from app.notifications.models import (
-    NotificationRequest,
     NotificationResponse,
     NotificationSendRequest,
 )
@@ -60,20 +57,7 @@ def get_sentiment(user_id: int = Query(gt=0)):
 @app.post("/notification/send")
 def send_notification(request: NotificationSendRequest):
     try:
-        event_type = get_next_manual_notification_for_user(
-            request.user_id,
-            db_engine=service.db_engine,
-        )
-
-        flow = FLOW_BY_EVENT_TYPE.get(event_type)
-        if flow is None:
-            raise ValueError(f"Unsupported notification event type: {event_type}")
-
-        pipeline_request = NotificationRequest(
-            user_id=request.user_id,
-            flow=flow,
-        )
-        result = service.build_notification(pipeline_request)
+        result = service.build_notification(request.user_id)
         if result is None:
             raise HTTPException(
                 status_code=500,
@@ -81,22 +65,22 @@ def send_notification(request: NotificationSendRequest):
             )
         if result.remote_send_status == "failed":
             raise HTTPException(status_code=502, detail=result.error or "Remote notification send failed")
-        if pipeline_request.should_send and result.remote_send_status == "skipped":
+        if result.should_send and result.remote_send_status == "skipped":
             raise HTTPException(status_code=502, detail=result.error or "Remote notification sender is unavailable")
 
         notification = NotificationResponse(
             user_id=result.user_id,
-            title=result.notification_title,
-            description=result.notification_body,
-            notification_type=result.notification_type or "VIDEO_RECOMMENDATION",
-            reference_id=int(result.reference_id or 0),
+            title=result.title,
+            description=result.description,
+            notification_type=result.notification_type,
+            reference_id=result.reference_id,
             video_popup=result.video_popup,
-            image=None,
+            image=result.image,
         )
         notification_data = notification.model_dump()
         return {
             "notification": notification_data,
-            "success": not pipeline_request.should_send or result.remote_send_status == "sent",
+            "success": not result.should_send or result.remote_send_status == "sent",
             "user_id": request.user_id,
         }
     except HTTPException:

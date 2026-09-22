@@ -92,8 +92,8 @@ def main() -> None:
                         insert_notification(
                             target_user_id=user_id,
                             event_type=event_type,
-                            title=result.notification_title,
-                            description=result.notification_body,
+                            title=result.title,
+                            description=result.description or "",
                             event_ref_id=result.reference_id,
                             event_details=result.model_dump(exclude_none=True),
                             created_at=datetime.now(timezone.utc),

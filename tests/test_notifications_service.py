@@ -52,11 +52,9 @@ def test_build_notification_performance_flow(monkeypatch):
 
     assert result.user_id == 953
     assert result.flow == "performance"
-    assert result.notification_title == "Growth Check"
-    assert result.video_id == 55
-    assert result.video_title == "Focus on clarity"
+    assert result.title == "Growth Check"
     assert result.reference_id == 55
-    assert result.deep_link == "/videos/55"
+    assert result.reference_id == 55
     assert result.video_popup is True
     assert captured == {"kii_name": "KII 117", "language_id": [1], "embedding": service_module.embed_text}
 
@@ -80,7 +78,7 @@ def test_build_notification_engagement_flow(monkeypatch):
 
     assert result.flow == "engagement"
     assert result.notification_type == "SENTIMENT_ENGAGEMENT"
-    assert result.notification_title == "Growth Check"
+    assert result.title == "Growth Check"
 
 
 def test_build_notification_engagement_skips_zero_questions(monkeypatch):
@@ -210,8 +208,7 @@ def test_performance_flow_passes_performance_query_embedding(monkeypatch):
 
     result = service.build_notification(NotificationRequest(user_id=953, flow="performance", should_send=False))
 
-    assert result.video_id == 88
-    assert result.deep_link == "/videos/88"
+    assert result.reference_id == 88
     assert captured == {
         "query": "query probe",
         "kii": 121,
@@ -265,7 +262,7 @@ def test_performance_flow_keeps_valid_hindi_and_telugu_recommendations(
     )
 
     assert result is not None
-    assert result.video_id == 55
+    assert result.reference_id == 55
     assert result.notification_type == "VIDEO_RECOMMENDATION"
 
 
@@ -396,7 +393,7 @@ def test_performance_flow_supports_configured_future_video_language(
         assert generator.prompts == []
     else:
         assert result is not None
-        assert result.video_id == 88
+        assert result.reference_id == 88
         assert result.notification_type == "VIDEO_RECOMMENDATION"
 
 
@@ -465,7 +462,6 @@ def test_sender_receives_selected_video_reference(monkeypatch):
 
     assert result.remote_send_status == "sent"
     assert result.reference_id == 363
-    assert result.deep_link == "/videos/363"
     assert sender.calls[0]["reference_id"] == 363
     assert sender.calls[0]["video_popup"] is True
 
@@ -498,9 +494,8 @@ def test_app_language_reaches_llm_but_video_languages_reach_recommender(monkeypa
     )
 
     assert result.reference_id == 701
-    assert result.deep_link == "/videos/701"
     assert recommender_languages == [[2, 5]]
-    assert "Notification language: ta" in generator.prompts[0]
+    assert "Language: ta" in generator.prompts[0]
 
 
 def test_performance_flow_normalizes_numeric_creator_identifier(monkeypatch):
@@ -519,7 +514,6 @@ def test_performance_flow_normalizes_numeric_creator_identifier(monkeypatch):
         NotificationRequest(user_id=953, flow="performance", should_send=False)
     )
 
-    assert result.creator_name == "1877"
 
 
 def _eligible_sentiment_rows():

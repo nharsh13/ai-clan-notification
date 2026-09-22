@@ -9,24 +9,15 @@ client = TestClient(app)
 
 
 def test_performance_send_matches_contract_and_forwards_selected_video(monkeypatch):
-    monkeypatch.setattr(main_module, "get_next_manual_notification_for_user", lambda *args, **kwargs: "VIDEO_RECOMMENDATION")
-
     def build_notification(request):
-        assert request.user_id == 953
+        assert request == 953
         return NotificationProcessingResult(
             user_id=953,
             flow="performance",
             notification_type="VIDEO_RECOMMENDATION",
-            action="Watch now",
-            audience_strategy="dynamic",
-            cohort_key="ai_clan",
-            creator_name="Coach",
-            deep_link="/videos/55",
-            notification_body="Keep building your communication skills.",
-            notification_title="Ava, watch this next",
+            title="Ava, watch this next",
+            description="Keep building your communication skills.",
             should_send=True,
-            video_id=55,
-            video_title="Communicate clearly",
             reference_id=55,
             video_popup=True,
             remote_send_status="sent",
@@ -73,16 +64,15 @@ def test_performance_send_matches_contract_and_forwards_selected_video(monkeypat
 
 
 def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
-    monkeypatch.setattr(main_module, "get_next_manual_notification_for_user", lambda *args, **kwargs: "VIDEO_RECOMMENDATION")
-
     monkeypatch.setattr(
         service,
         "build_notification",
         lambda request: NotificationProcessingResult(
-            user_id=request.user_id,
+            user_id=request,
             flow="performance",
-            notification_title="Title",
-            notification_body="Body",
+            title="Title",
+            description="Body",
+            notification_type="VIDEO_RECOMMENDATION",
             should_send=True,
             remote_send_status="failed",
             error="Remote API error 503",
@@ -102,29 +92,21 @@ def test_send_follows_notification_cycle(monkeypatch):
         "SENTIMENT_QA",
         "VIDEO_RECOMMENDATION",
     ])
-    requested_flows = []
-
-    def select_next_event(*args, **kwargs):
-        return next(event_types)
+    requested_users = []
 
     def build_notification(request):
-        requested_flows.append(request.flow)
+        requested_users.append(request)
         return NotificationProcessingResult(
             user_id=953,
-            flow=request.flow,
-            notification_type={
-                "performance": "VIDEO_RECOMMENDATION",
-                "engagement": "SENTIMENT_ENGAGEMENT",
-                "sentiment": "SENTIMENT_QA",
-            }[request.flow],
-            notification_title="Title",
-            notification_body="Body",
+            flow="performance",
+            notification_type="VIDEO_RECOMMENDATION",
+            title="Title",
+            description="Body",
             should_send=True,
             reference_id=1,
             remote_send_status="sent",
         )
 
-    monkeypatch.setattr(main_module, "get_next_manual_notification_for_user", select_next_event)
     monkeypatch.setattr(
         main_module,
         "insert_notification",
@@ -136,7 +118,7 @@ def test_send_follows_notification_cycle(monkeypatch):
     responses = [client.post("/notification/send", json={"user_id": 953}) for _ in range(4)]
 
     assert [response.status_code for response in responses] == [200, 200, 200, 200]
-    assert requested_flows == ["performance", "engagement", "sentiment", "performance"]
+    assert requested_users == [953, 953, 953, 953]
 
 
 def test_performance_endpoint_is_read_only(monkeypatch):

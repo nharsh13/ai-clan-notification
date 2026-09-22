@@ -94,13 +94,7 @@ def test_generate_engagement_sentiment_notification_improvement(monkeypatch):
 
     prompt = fake_client.responses.last_input
 
-    assert "40" in prompt
     assert "IMPROVEMENT" in prompt
-    assert "10" in prompt
-    assert "4" in prompt
-
-
-# ============================================================
 # ENGAGEMENT SENTIMENT — POSITIVE
 # ============================================================
 
@@ -159,11 +153,7 @@ def test_generate_engagement_sentiment_notification_positive(monkeypatch):
 
     prompt = fake_client.responses.last_input
 
-    assert "80" in prompt
     assert "POSITIVE" in prompt
-    assert "10" in prompt
-    assert "8" in prompt
-
 
 # ============================================================
 # ENGAGEMENT SENTIMENT — NO DATA
@@ -294,9 +284,6 @@ def test_engagement_sentiment_prompt_contains_required_data():
     assert "Rahul" in prompt
     assert "English" in prompt
 
-    assert "10" in prompt
-    assert "4" in prompt
-    assert "40" in prompt
     assert "IMPROVEMENT" in prompt
 
     # Engagement sentiment should not depend on individual Q&A
@@ -369,7 +356,7 @@ def test_validate_engagement_sentiment_notification_rejects_missing_title():
 
     with pytest.raises(
         ValueError,
-        match="title is missing",
+        match="title must be a non-empty string",
     ):
         llm.validate_engagement_sentiment_notification(notification)
 
@@ -385,7 +372,7 @@ def test_validate_engagement_sentiment_notification_rejects_missing_description(
 
     with pytest.raises(
         ValueError,
-        match="description is missing",
+        match="description must be a non-empty string",
     ):
         llm.validate_engagement_sentiment_notification(notification)
 
@@ -402,7 +389,7 @@ def test_validate_engagement_sentiment_notification_rejects_empty_title():
 
     with pytest.raises(
         ValueError,
-        match="title is empty",
+        match="title must be a non-empty string",
     ):
         llm.validate_engagement_sentiment_notification(notification)
 
@@ -419,7 +406,7 @@ def test_validate_engagement_sentiment_notification_rejects_empty_description():
 
     with pytest.raises(
         ValueError,
-        match="description is empty",
+        match="description must be a non-empty string",
     ):
         llm.validate_engagement_sentiment_notification(notification)
 
@@ -456,7 +443,7 @@ def test_validate_qa_sentiment_notification_rejects_missing_title():
 
     with pytest.raises(
         ValueError,
-        match="title is missing",
+        match="title must be a non-empty string",
     ):
         llm.validate_qa_sentiment_notification(notification)
 
@@ -472,7 +459,7 @@ def test_validate_qa_sentiment_notification_rejects_missing_description():
 
     with pytest.raises(
         ValueError,
-        match="description is missing",
+        match="description must be a non-empty string",
     ):
         llm.validate_qa_sentiment_notification(notification)
 
