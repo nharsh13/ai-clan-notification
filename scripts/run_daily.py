@@ -1,6 +1,6 @@
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
@@ -10,7 +10,6 @@ from app.database.connection import engine
 from app.database.notification_repository import (
     get_next_notification_for_user,
     has_notification_for_user_on_date,
-    insert_notification,
 )
 from app.notifications.models import NotificationRequest
 from app.notifications.service import NotificationService
@@ -89,16 +88,6 @@ def main() -> None:
                             )
                             continue
 
-                        insert_notification(
-                            target_user_id=user_id,
-                            event_type=event_type,
-                            title=result.title,
-                            description=result.description or "",
-                            event_ref_id=result.reference_id,
-                            event_details=result.model_dump(exclude_none=True),
-                            created_at=datetime.now(timezone.utc),
-                            db_engine=engine,
-                        )
                         processed_count += 1
                         logger.info("[SUCCESS] Notification processed successfully user_id=%s flow=%s", user_id, flow)
                     except Exception as exc:

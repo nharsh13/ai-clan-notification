@@ -464,6 +464,15 @@ def test_sender_receives_selected_video_reference(monkeypatch):
     assert result.reference_id == 363
     assert sender.calls[0]["reference_id"] == 363
     assert sender.calls[0]["video_popup"] is True
+    assert set(sender.calls[0]) == {
+        "user_id",
+        "notification_type",
+        "title",
+        "description",
+        "reference_id",
+        "video_popup",
+        "image",
+    }
 
 
 def test_app_language_reaches_llm_but_video_languages_reach_recommender(monkeypatch):

@@ -352,7 +352,14 @@ def test_scheduler_continues_after_one_user_failure(monkeypatch):
     monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
     monkeypatch.setattr(run_daily, "get_next_notification_for_user", lambda *args, **kwargs: "VIDEO_RECOMMENDATION")
     monkeypatch.setattr(run_daily, "has_notification_for_user_on_date", lambda *args, **kwargs: False)
-    monkeypatch.setattr(run_daily, "insert_notification", lambda **kwargs: None)
+    monkeypatch.setattr(
+        run_daily,
+        "insert_notification",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("scheduler must persist through the notification URL")
+        ),
+        raising=False,
+    )
 
     run_daily.main()
 
@@ -362,7 +369,6 @@ def test_scheduler_continues_after_one_user_failure(monkeypatch):
 
 def test_scheduler_skips_sentiment_when_no_eligible_qa(monkeypatch):
     engine = FakeSchedulerEngine([953])
-    inserted = []
     requests_seen = []
 
     class FakeService:
@@ -374,9 +380,7 @@ def test_scheduler_skips_sentiment_when_no_eligible_qa(monkeypatch):
     monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
     monkeypatch.setattr(run_daily, "get_next_notification_for_user", lambda *args, **kwargs: "SENTIMENT_QA")
     monkeypatch.setattr(run_daily, "has_notification_for_user_on_date", lambda *args, **kwargs: False)
-    monkeypatch.setattr(run_daily, "insert_notification", lambda **kwargs: inserted.append(kwargs))
 
     run_daily.main()
 
     assert requests_seen[0].flow == "sentiment"
-    assert inserted == []
