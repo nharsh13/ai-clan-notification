@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -7,6 +8,7 @@ from openai import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    AsyncOpenAI,
     InternalServerError,
     OpenAI,
     RateLimitError,
@@ -56,12 +58,38 @@ def _generate_with_retry(client, model: str, prompt: str) -> Any:
             time.sleep(delay)
 
 
+async def _generate_with_retry_async(client, model: str, prompt: str) -> Any:
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return await client.responses.create(model=model, input=prompt)
+        except Exception as error:
+            if not _is_temporary_openai_error(error) or attempt == MAX_RETRIES:
+                raise
+            delay = RETRY_BACKOFF_SECONDS[attempt]
+            logger.warning(
+                "Temporary OpenAI error; retrying in %ss (attempt %s/%s) error_type=%s",
+                delay,
+                attempt + 1,
+                MAX_RETRIES,
+                type(error).__name__,
+            )
+            await asyncio.sleep(delay)
+
+
 def _get_openai_client() -> OpenAI:
     if not OPENAI_API_KEY:
         raise ValueError(
             "Missing required environment variable: OPENAI_API_KEY. Add it to the .env file."
         )
     return OpenAI(api_key=OPENAI_API_KEY)
+
+
+def _get_async_openai_client() -> AsyncOpenAI:
+    if not OPENAI_API_KEY:
+        raise ValueError(
+            "Missing required environment variable: OPENAI_API_KEY. Add it to the .env file."
+        )
+    return AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 
 def _parse_json_response(content: str) -> dict:
@@ -156,6 +184,11 @@ class NotificationGenerator:
     def generate(self, prompt: str) -> dict[str, str]:
         client = self.client or _get_openai_client()
         response = _generate_with_retry(client, self.model, prompt)
+        return self.validate(response.output_text)
+
+    async def generate_async(self, prompt: str) -> dict[str, str]:
+        client = self.client or _get_async_openai_client()
+        response = await _generate_with_retry_async(client, self.model, prompt)
         return self.validate(response.output_text)
 
 

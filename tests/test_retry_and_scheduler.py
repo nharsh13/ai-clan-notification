@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -507,3 +508,95 @@ def test_scheduler_skips_sentiment_when_no_eligible_qa(monkeypatch):
     run_daily.main()
 
     assert requests_seen[0].flow == "sentiment"
+
+
+def test_openai_async_generate_uses_awaited_client_call(monkeypatch):
+    class AsyncFakeResponses:
+        def __init__(self):
+            self.calls = 0
+
+        async def create(self, **kwargs):
+            self.calls += 1
+            return type("Response", (), {"output_text": json.dumps({
+                "title": "Title",
+                "description": "Description",
+                "action": "Watch now",
+            })})()
+
+    class AsyncFakeOpenAIClient:
+        def __init__(self):
+            self.responses = AsyncFakeResponses()
+
+    async def run_test():
+        client = AsyncFakeOpenAIClient()
+        result = await llm.NotificationGenerator(client=client).generate_async("prompt")
+        assert result["title"] == "Title"
+        assert client.responses.calls == 1
+
+    asyncio.run(run_test())
+
+
+def test_sender_async_send_uses_async_http_client(monkeypatch):
+    class AsyncResponse:
+        ok = True
+        status_code = 200
+        text = "ok"
+
+        async def json(self):
+            return {"ok": True}
+
+    class AsyncClient:
+        def __init__(self):
+            self.calls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return AsyncResponse()
+
+    async def run_test():
+        captured = {}
+        monkeypatch.setattr("app.notifications.sender.httpx", type("HttpxModule", (), {"AsyncClient": lambda *a, **k: captured.setdefault("client", AsyncClient())}))
+
+        result = await NotificationSender(remote_url="https://example.test").send_async(
+            user_id=1,
+            notification_type="VIDEO_RECOMMENDATION",
+            title="Title",
+            description="Description",
+            reference_id=10,
+        )
+
+        assert result["status_code"] == 200
+        assert captured["client"].calls
+
+    asyncio.run(run_test())
+
+
+def test_scheduler_limits_concurrency_to_five(monkeypatch):
+    active = 0
+    peak = 0
+
+    async def fake_process_user(user_id, user_name, *, position=None, total_users=None, test_mode=None, semaphore=None):
+        nonlocal active, peak
+        async with semaphore:
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+        return user_id
+
+    async def run_test():
+        monkeypatch.setattr(run_daily, "_process_user_async", fake_process_user)
+        monkeypatch.setattr(run_daily, "_collect_users", lambda: [(i, f"User {i}") for i in range(1, 26)])
+
+        result = await run_daily.run_scheduler_async()
+
+        assert result["total_users"] == 25
+        assert peak <= 5
+
+    asyncio.run(run_test())

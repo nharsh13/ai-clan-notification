@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -7,6 +8,7 @@ from openai import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    AsyncOpenAI,
     InternalServerError,
     OpenAI,
     RateLimitError,
@@ -61,6 +63,41 @@ def _generate_with_retry(
             time.sleep(delay)
 
 
+async def _generate_with_retry_async(
+    client,
+    model: str,
+    prompt: str,
+    *,
+    user_id: int | None = None,
+    notification_type: str | None = None,
+) -> Any:
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            return await client.responses.create(model=model, input=prompt)
+        except Exception as error:
+            if not _is_temporary_openai_error(error) or attempt == MAX_RETRIES:
+                logger.error(
+                    "OpenAI LLM failed after all retries user_id=%s notification_type=%s model=%s retry_attempt=%s error_type=%s",
+                    user_id,
+                    notification_type,
+                    model,
+                    attempt + 1,
+                    type(error).__name__,
+                )
+                raise
+            delay = RETRY_BACKOFF_SECONDS[attempt]
+            logger.warning(
+                "OpenAI LLM retry user_id=%s notification_type=%s model=%s retry_attempt=%s error_type=%s backoff_seconds=%s",
+                user_id,
+                notification_type,
+                model,
+                attempt + 1,
+                type(error).__name__,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
+
 def _get_openai_client() -> OpenAI:
     """
     Create OpenAI client.
@@ -73,6 +110,16 @@ def _get_openai_client() -> OpenAI:
         )
 
     return OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT_SECONDS)
+
+
+def _get_async_openai_client() -> AsyncOpenAI:
+    if not OPENAI_API_KEY:
+        raise ValueError(
+            "Missing required environment variable: OPENAI_API_KEY. "
+            "Add it to the .env file."
+        )
+
+    return AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT_SECONDS)
 
 
 def _parse_json_response(content: str) -> dict:
@@ -122,6 +169,34 @@ class NotificationGenerator:
     ) -> dict[str, str]:
         client = self.client or _get_openai_client()
         response = _generate_with_retry(
+            client,
+            self.model,
+            prompt,
+            user_id=user_id,
+            notification_type=notification_type,
+        )
+        try:
+            return self.validate(response.output_text)
+        except Exception as error:
+            logger.error(
+                "OpenAI LLM response validation failed user_id=%s notification_type=%s model=%s retry_attempt=%s error_type=%s",
+                user_id,
+                notification_type,
+                self.model,
+                0,
+                type(error).__name__,
+            )
+            raise
+
+    async def generate_async(
+        self,
+        prompt: str,
+        *,
+        user_id: int | None = None,
+        notification_type: str | None = None,
+    ) -> dict[str, str]:
+        client = self.client or _get_async_openai_client()
+        response = await _generate_with_retry_async(
             client,
             self.model,
             prompt,
