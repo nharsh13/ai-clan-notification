@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -103,12 +104,12 @@ def has_notification_for_user_on_date(
         WHERE target_user_id = :user_id
           AND event_type = :event_type
           AND status = 1
-          AND created_at::date = :created_on
+          AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = :created_on
         LIMIT 1
         """
     )
 
-    created_on = (as_of_date or datetime.now(timezone.utc).date())
+    created_on = as_of_date or datetime.now(ZoneInfo("Asia/Kolkata")).date()
     with db_engine.connect() as connection:
         row = connection.execute(query, {
             "user_id": user_id,

@@ -249,7 +249,7 @@ class FakeUserResult:
         self.user_ids = user_ids
 
     def __iter__(self):
-        return iter([(user_id,) for user_id in self.user_ids])
+        return iter([(user_id, f"User {user_id}") for user_id in self.user_ids])
 
 
 class FakeSchedulerConnection:
@@ -301,6 +301,8 @@ def test_scheduler_selects_only_required_user_scope(monkeypatch):
     assert "and debug = false" in normalized_query
     assert "and user_type_id = 1" in normalized_query
     assert "id is not null" not in normalized_query
+    assert "coalesce" in normalized_query
+    assert "name" in normalized_query
 
 
 def test_scheduler_rejects_second_process_and_releases_lock(monkeypatch):
@@ -342,6 +344,8 @@ def test_scheduler_continues_after_one_user_failure(monkeypatch):
             return {"notification_type": "VIDEO_RECOMMENDATION"}
 
     class FakeService:
+        last_skip_reason = "NO_ENGAGEMENT_DATA"
+
         def build_notification(self, request):
             processed.append(request.user_id)
             if request.user_id == 2:
@@ -365,6 +369,125 @@ def test_scheduler_continues_after_one_user_failure(monkeypatch):
 
     assert processed == [1, 2, 3]
     assert any("pg_advisory_unlock" in query for query in engine.connection.queries)
+
+
+def test_scheduler_logs_progress_names_types_and_skip_reasons(monkeypatch, caplog):
+    engine = FakeSchedulerEngine([1, 2, 3, 4])
+    notification_types = {
+        1: "VIDEO_RECOMMENDATION",
+        2: "SENTIMENT_ENGAGEMENT",
+        3: "SENTIMENT_QA",
+    }
+
+    class FakeResult:
+        remote_send_status = "sent"
+        error = None
+
+        def __init__(self, notification_type):
+            self.notification_type = notification_type
+
+    class FakeService:
+        last_skip_reason = "NO_ENGAGEMENT_DATA"
+
+        def build_notification(self, request):
+            if request.user_id == 4:
+                return None
+            return FakeResult(notification_types[request.user_id])
+
+    monkeypatch.setattr(run_daily, "engine", engine)
+    monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
+    monkeypatch.setattr(
+        run_daily,
+        "get_next_notification_for_user",
+        lambda user_id, **kwargs: "VIDEO_RECOMMENDATION",
+    )
+    monkeypatch.setattr(
+        run_daily,
+        "has_notification_for_user_on_date",
+        lambda user_id, event_type, **kwargs: False,
+    )
+
+    with caplog.at_level("INFO", logger=run_daily.logger.name):
+        run_daily.main()
+
+    output = caplog.text
+    assert "[1/4] USER ID: 1 | Name: User 1" in output
+    assert "[2/4] USER ID: 2 | Name: User 2" in output
+    assert "[3/4] USER ID: 3 | Name: User 3" in output
+    assert "[4/4] USER ID: 4 | Name: User 4" in output
+    assert "Notification Type : VIDEO_RECOMMENDATION" in output
+    assert "Notification Type : SENTIMENT_ENGAGEMENT" in output
+    assert "Notification Type : SENTIMENT_QA" in output
+    assert "Reason            : NO_ENGAGEMENT_DATA" in output
+    assert "[JOB] Total Users : 4" in output
+    assert "[JOB] Successful  : 3" in output
+    assert "[JOB] Skipped     : 1" in output
+    assert "[JOB] Failed      : 0" in output
+    assert "Campaign day" not in output
+
+
+def test_scheduler_test_mode_bypasses_only_duplicate_check(monkeypatch, caplog):
+    engine = FakeSchedulerEngine([953])
+    processed = []
+
+    class FakeResult:
+        remote_send_status = "sent"
+        notification_type = "SENTIMENT_QA"
+
+    class FakeService:
+        def build_notification(self, request):
+            processed.append(request.user_id)
+            return FakeResult()
+
+    monkeypatch.setenv("SCHEDULER_TEST_MODE", "true")
+    monkeypatch.setattr(run_daily, "engine", engine)
+    monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
+    monkeypatch.setattr(
+        run_daily,
+        "get_next_notification_for_user",
+        lambda *args, **kwargs: "SENTIMENT_QA",
+    )
+    monkeypatch.setattr(
+        run_daily,
+        "has_notification_for_user_on_date",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("duplicate check must be bypassed in test mode")
+        ),
+    )
+
+    with caplog.at_level("INFO", logger=run_daily.logger.name):
+        run_daily.main()
+
+    assert processed == [953]
+    assert "TEST MODE: ENABLED - today's duplicate check is bypassed" in caplog.text
+
+
+def test_scheduler_normal_mode_keeps_duplicate_skip(monkeypatch):
+    engine = FakeSchedulerEngine([953])
+    processed = []
+
+    class FakeService:
+        def build_notification(self, request):
+            processed.append(request.user_id)
+            raise AssertionError("generation must not run for duplicate notifications")
+
+    monkeypatch.delenv("SCHEDULER_TEST_MODE", raising=False)
+    monkeypatch.setattr(run_daily, "engine", engine)
+    monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
+    monkeypatch.setattr(
+        run_daily,
+        "get_next_notification_for_user",
+        lambda *args, **kwargs: "SENTIMENT_QA",
+    )
+    monkeypatch.setattr(
+        run_daily,
+        "has_notification_for_user_on_date",
+        lambda *args, **kwargs: True,
+    )
+
+    run_daily.main()
+
+    assert processed == []
 
 
 def test_scheduler_skips_sentiment_when_no_eligible_qa(monkeypatch):

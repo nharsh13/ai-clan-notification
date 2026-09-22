@@ -91,14 +91,16 @@ def test_build_notification_engagement_skips_zero_questions(monkeypatch):
     sender = DummySender()
     generator = DummyGenerator()
 
-    result = service_module.NotificationService(
+    service = service_module.NotificationService(
         sender=sender,
         generator=generator,
-    ).build_notification(
+    )
+    result = service.build_notification(
         NotificationRequest(user_id=953, flow="engagement")
     )
 
     assert result is None
+    assert service.last_skip_reason == "NO_ENGAGEMENT_DATA"
     assert generator.prompts == []
     assert sender.calls == []
 
@@ -126,6 +128,37 @@ def test_build_notification_engagement_keeps_positive_threshold(monkeypatch):
 
     assert result is not None
     assert result.notification_type == "SENTIMENT_ENGAGEMENT"
+
+
+def test_engagement_does_not_require_video_language_or_recommendation(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Nia",
+        "app_language_code": "en",
+        "video_language_ids": [],
+    })
+    monkeypatch.setattr(service_module, "get_user_response_rate", lambda user_id: {
+        "user_id": user_id,
+        "questions_sent": 10,
+        "questions_answered": 6,
+        "response_percentage": 60.0,
+        "notification_type": "POSITIVE",
+    })
+    monkeypatch.setattr(
+        service_module,
+        "recommend_video",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("engagement must not recommend a video")
+        ),
+    )
+
+    result = service_module.NotificationService(
+        sender=DummySender(),
+        generator=DummyGenerator(),
+    ).build_notification(NotificationRequest(user_id=953, flow="engagement"))
+
+    assert result.notification_type == "SENTIMENT_ENGAGEMENT"
+    assert result.reference_id == 0
+    assert result.video_popup is None
 
 
 def test_build_notification_uses_exact_uppercase_scheduler_event_types(monkeypatch):
@@ -232,6 +265,7 @@ def test_performance_flow_handles_no_video(monkeypatch):
     )
 
     assert result is None
+    assert service.last_skip_reason == "NO_VIDEO_RECOMMENDATION"
     assert service.generator.prompts == []
     assert service.sender.calls == []
 
@@ -283,19 +317,21 @@ def test_performance_flow_skips_when_hindi_or_telugu_video_is_unavailable(
     sender = DummySender()
     generator = DummyGenerator()
 
-    result = service_module.NotificationService(
+    service = service_module.NotificationService(
         sender=sender,
         generator=generator,
-    ).build_notification(
-        NotificationRequest(user_id=953, flow="performance")
+    )
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False)
     )
 
     assert result is None
+    assert service.last_skip_reason == "NO_VIDEO_RECOMMENDATION"
     assert generator.prompts == []
     assert sender.calls == []
 
 
-def test_performance_flow_skips_missing_video_preference_without_english_fallback(monkeypatch):
+def test_performance_flow_defaults_null_video_language_to_telugu(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava",
         "app_language_code": "en",
@@ -304,46 +340,57 @@ def test_performance_flow_skips_missing_video_preference_without_english_fallbac
     monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
         "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
     })
-    recommender_called = []
+    captured = {}
+    monkeypatch.setattr(
+        service_module.NotificationService,
+        "_get_telugu_video_language_id",
+        lambda self: 3,
+    )
     monkeypatch.setattr(
         service_module,
         "recommend_video",
-        lambda *args, **kwargs: recommender_called.append(True),
+        lambda performance, language_id, embed, db_engine, user_id: (
+            captured.update(language_id=language_id) or {"video_id": 55, "title": "Focus better"}
+        ),
     )
     sender = DummySender()
     generator = DummyGenerator()
 
-    result = service_module.NotificationService(
+    service = service_module.NotificationService(
         sender=sender,
         generator=generator,
-    ).build_notification(
-        NotificationRequest(user_id=953, flow="performance")
+    )
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False)
     )
 
-    assert result is None
-    assert recommender_called == []
-    assert generator.prompts == []
+    assert result is not None
+    assert captured["language_id"] == [3]
+    assert result.reference_id == 55
     assert sender.calls == []
 
 
-@pytest.mark.parametrize("app_language", ["en", "hi", "te"])
-def test_performance_flow_does_not_infer_video_preference_from_app_language(
-    monkeypatch,
-    app_language,
-):
+def test_performance_flow_defaults_empty_video_language_to_telugu(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava",
-        "app_language_code": app_language,
+        "app_language_code": "en",
         "video_language_ids": [],
     })
     monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
         "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
     })
-    recommender_called = []
+    captured = {}
+    monkeypatch.setattr(
+        service_module.NotificationService,
+        "_get_telugu_video_language_id",
+        lambda self: 3,
+    )
     monkeypatch.setattr(
         service_module,
         "recommend_video",
-        lambda *args, **kwargs: recommender_called.append(True),
+        lambda performance, language_id, embed, db_engine, user_id: (
+            captured.update(language_id=language_id) or {"video_id": 55, "title": "Focus better"}
+        ),
     )
 
     result = service_module.NotificationService(
@@ -353,8 +400,35 @@ def test_performance_flow_does_not_infer_video_preference_from_app_language(
         NotificationRequest(user_id=953, flow="performance")
     )
 
-    assert result is None
-    assert recommender_called == []
+    assert result is not None
+    assert captured["language_id"] == [3]
+    assert result.reference_id == 55
+
+
+def test_telugu_video_language_id_is_loaded_from_language_table():
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return 3
+
+    class FakeConnection:
+        def execute(self, query):
+            assert "public.md_language" in str(query)
+            assert "lower(code) = 'te'" in str(query)
+            return FakeResult()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    class FakeEngine:
+        def connect(self):
+            return FakeConnection()
+
+    service = service_module.NotificationService(db_engine=FakeEngine())
+
+    assert service._get_telugu_video_language_id() == 3
 
 
 @pytest.mark.parametrize("recommendation", [
@@ -438,9 +512,33 @@ def test_performance_flow_propagates_llm_failure(monkeypatch):
     sender = DummySender()
     service = service_module.NotificationService(sender=sender, generator=FailingGenerator())
     import pytest
-    with pytest.raises(RuntimeError, match="LLM unavailable"):
-        service.build_notification(NotificationRequest(user_id=953, flow="performance"))
+    result = service.build_notification(NotificationRequest(user_id=953, flow="performance"))
+    assert result is None
+    assert service.last_skip_reason == "LLM_NO_RESPONSE"
     assert sender.calls == []
+
+
+def test_empty_llm_response_is_skipped_with_reason(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 10},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: {
+        "video_id": 55, "title": "Focus better",
+    })
+
+    class EmptyGenerator:
+        def generate(self, prompt, **kwargs):
+            return {}
+
+    service = service_module.NotificationService(sender=DummySender(), generator=EmptyGenerator())
+    result = service.build_notification(NotificationRequest(user_id=953, flow="performance"))
+
+    assert result is None
+    assert service.last_skip_reason == "LLM_NO_RESPONSE"
+    assert service.sender.calls == []
 
 
 def test_sender_receives_selected_video_reference(monkeypatch):
@@ -596,13 +694,51 @@ def test_sentiment_with_no_eligible_qa_skips_llm_and_sender(monkeypatch):
     })
     monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: [])
 
-    result = service_module.NotificationService(sender=sender, generator=generator).build_notification(
+    service = service_module.NotificationService(sender=sender, generator=generator)
+    result = service.build_notification(
         NotificationRequest(user_id=953, flow="sentiment")
     )
 
     assert result is None
+    assert service.last_skip_reason == "NO_QA_DATA"
     assert generator.prompts == []
     assert sender.calls == []
+
+
+def test_sentiment_does_not_require_video_language_or_recommendation(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava",
+        "app_language_code": "en",
+        "video_language_ids": [],
+    })
+    monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: _eligible_sentiment_rows())
+    monkeypatch.setattr(
+        service_module,
+        "prepare_user_qa",
+        lambda user_id, db_engine=None, rows=None: {
+            "user_id": user_id,
+            "questions": [{
+                "question_id": row["question_id"],
+                "responses": [{"question": row["question"], "answer": row["answer"]}],
+            } for row in rows],
+        },
+    )
+    monkeypatch.setattr(
+        service_module,
+        "recommend_video",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Q&A must not recommend a video")
+        ),
+    )
+
+    result = service_module.NotificationService(
+        sender=DummySender(),
+        generator=DummyGenerator(),
+    ).build_notification(NotificationRequest(user_id=953, flow="sentiment"))
+
+    assert result.notification_type == "SENTIMENT_QA"
+    assert result.reference_id == 0
+    assert result.video_popup is None
 
 
 def test_get_sentiment_returns_unused_qa(monkeypatch):
@@ -659,8 +795,9 @@ def test_sentiment_llm_failure_does_not_save_history(monkeypatch):
     service = _configure_sentiment_service(monkeypatch, DummySender(), FailingGenerator())
 
     import pytest
-    with pytest.raises(RuntimeError, match="LLM unavailable"):
-        service.build_notification(NotificationRequest(user_id=953, flow="sentiment"))
+    result = service.build_notification(NotificationRequest(user_id=953, flow="sentiment"))
+    assert result is None
+    assert service.last_skip_reason == "LLM_NO_RESPONSE"
     assert saved == []
 
 

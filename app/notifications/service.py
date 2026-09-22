@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 import logging
 
+from sqlalchemy import text
+
 from app.config import OPENAI_API_KEY
 from app.database.connection import engine
 from app.database.notification_repository import get_next_manual_notification_for_user
@@ -32,6 +34,12 @@ from app.sentiment.sentiment import (
 
 logger = logging.getLogger(__name__)
 
+NO_ENGAGEMENT_DATA = "NO_ENGAGEMENT_DATA"
+NO_QA_DATA = "NO_QA_DATA"
+NO_VIDEO_RECOMMENDATION = "NO_VIDEO_RECOMMENDATION"
+LLM_NO_RESPONSE = "LLM_NO_RESPONSE"
+MISSING_REQUIRED_DATA = "MISSING_REQUIRED_DATA"
+
 
 class NotificationService:
     """Coordinate the AI-CLAN notification pipeline."""
@@ -46,6 +54,7 @@ class NotificationService:
         self.generator = generator or NotificationGenerator()
         self.db_engine = db_engine
         self.engine = NotificationEngine()
+        self.last_skip_reason: str | None = None
 
     def _get_user_profile(
         self,
@@ -54,11 +63,13 @@ class NotificationService:
     ) -> dict[str, Any]:
         profile = get_user(user_id, self.db_engine)
         if profile is None:
-            raise ValueError(f"User not found: {user_id}")
+            self.last_skip_reason = MISSING_REQUIRED_DATA
+            return None
 
         language_code = str(profile.get("app_language_code") or "").strip().lower()
         if not language_code:
-            raise ValueError(f"App language is missing: {user_id}")
+            self.last_skip_reason = MISSING_REQUIRED_DATA
+            return None
         video_language_ids = profile.get("video_language_ids") or []
 
         return {
@@ -82,6 +93,21 @@ class NotificationService:
             "title": f"{user_name}, Focus on {context}",
             "description": "Keep refining the area that is currently your biggest opportunity and build momentum with small, consistent actions.",
         }
+
+    def _get_telugu_video_language_id(self) -> int | None:
+        query = text(
+            """
+            SELECT id
+            FROM public.md_language
+            WHERE lower(code) = 'te'
+               OR lower(name) = 'telugu'
+            ORDER BY CASE WHEN lower(code) = 'te' THEN 0 ELSE 1 END, id
+            LIMIT 1
+            """
+        )
+        with self.db_engine.connect() as connection:
+            language_id = connection.execute(query).scalar_one_or_none()
+        return int(language_id) if language_id is not None else None
 
     def _generate_llm_notification(self, flow: str, user_name: str, payload: dict[str, Any]) -> dict[str, str]:
         if flow == "engagement":
@@ -123,13 +149,14 @@ class NotificationService:
             user_id,
             require_video_language=flow == "performance",
         )
+        if profile is None:
+            return None
         user_name = str(profile["user_name"]).strip() or f"User {user_id}"
         language = str(profile["app_language_code"]).strip()
-        if flow == "performance" and not profile["video_language_ids"]:
-            return None
         if flow == "engagement":
             response_data = get_user_response_rate(user_id)
             if not response_data or response_data["questions_sent"] == 0:
+                self.last_skip_reason = NO_ENGAGEMENT_DATA
                 return None
             return user_name, {
                 "user_id": user_id,
@@ -140,6 +167,7 @@ class NotificationService:
         if flow == "sentiment":
             eligible_responses = get_eligible_user_qa(user_id, self.db_engine)
             if not eligible_responses:
+                self.last_skip_reason = NO_QA_DATA
                 return user_name, {
                     "language": language,
                     "prepared_qa": None,
@@ -169,11 +197,18 @@ class NotificationService:
             }
 
         # Performance calculation and video retrieval remain separate concerns.
+        language_id = profile["video_language_ids"]
+        if not language_id:
+            telugu_language_id = self._get_telugu_video_language_id()
+            if telugu_language_id is None:
+                self.last_skip_reason = MISSING_REQUIRED_DATA
+                return None
+            language_id = [telugu_language_id]
         calc = calculate_performance(user_id)
         weakest = calc.get("improvement_area")
         if not weakest:
-            raise ValueError(f"No weakest KII found for user: {user_id}")
-        language_id = profile.get("video_language_ids")
+            self.last_skip_reason = MISSING_REQUIRED_DATA
+            return None
         performance = type(
             "PerformanceContext",
             (),
@@ -187,6 +222,7 @@ class NotificationService:
             user_id=user_id,
         )
         if recommendation is None:
+            self.last_skip_reason = NO_VIDEO_RECOMMENDATION
             return None
 
         return user_name, {
@@ -251,6 +287,7 @@ class NotificationService:
         flow: str | None = None,
         should_send: bool | None = None,
     ) -> NotificationProcessingResult | None:
+        self.last_skip_reason = None
         if isinstance(user_id, NotificationRequest):
             request = user_id
             user_id = request.user_id
@@ -280,8 +317,23 @@ class NotificationService:
             return None
         user_name, payload = flow_context
         if flow == "sentiment" and not payload["history_records"]:
+            self.last_skip_reason = NO_QA_DATA
             return None
-        notification_data = self._generate_llm_notification(flow, user_name, payload)
+        try:
+            notification_data = self._generate_llm_notification(flow, user_name, payload)
+        except Exception:
+            self.last_skip_reason = LLM_NO_RESPONSE
+            logger.exception("LLM returned no usable notification for user=%s flow=%s", user_id, flow)
+            return None
+        if (
+            not isinstance(notification_data, dict)
+            or not isinstance(notification_data.get("title"), str)
+            or not notification_data["title"].strip()
+            or not isinstance(notification_data.get("description"), str)
+            or not notification_data["description"].strip()
+        ):
+            self.last_skip_reason = LLM_NO_RESPONSE
+            return None
 
         if flow == "performance":
             video = payload["video"]

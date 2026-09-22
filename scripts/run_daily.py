@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -21,11 +22,19 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     started_at = datetime.now(SCHEDULER_TIMEZONE)
-    processed_count = 0
+    test_mode = os.getenv("SCHEDULER_TEST_MODE", "").strip().lower() == "true"
+    successful_count = 0
     failed_count = 0
     skipped_count = 0
-    logger.info("[JOB] Job STARTED")
-    logger.info("[JOB] Start timestamp in IST: %s", started_at.isoformat())
+    total_users = 0
+    logger.info("=" * 60)
+    logger.info("              AI-CLAN NOTIFICATION SCHEDULER")
+    logger.info("=" * 60)
+    logger.info("")
+    logger.info("[JOB] STARTED")
+    logger.info("[JOB] Start Time     : %s", started_at.strftime("%Y-%m-%d %H:%M:%S %Z"))
+    if test_mode:
+        logger.info("TEST MODE: ENABLED - today's duplicate check is bypassed")
     service = NotificationService()
     try:
         with engine.connect() as lock_connection:
@@ -40,12 +49,12 @@ def main() -> None:
 
             try:
                 with engine.connect() as connection:
-                    user_ids = [
-                        row[0]
+                    users = [
+                        (row[0], row[1])
                         for row in connection.execute(
                             text(
                                 '''
-                                SELECT id
+                                SELECT id, COALESCE(NULLIF(name, ''), '') AS user_name
                                 FROM public."user"
                                 WHERE account_id = 14
                                   AND status = 1
@@ -56,19 +65,29 @@ def main() -> None:
                         )
                     ]
 
-                logger.info("[JOB] Total eligible users fetched: %d", len(user_ids))
-                for user_id in user_ids:
-                    logger.info("[USER] Current user ID=%s name=unavailable", user_id)
-                    logger.info("[USER] Campaign day: not calculated by existing job")
+                total_users = len(users)
+                logger.info("[JOB] Total Users    : %d", total_users)
+                logger.info("-" * 60)
+                logger.info("")
+                for position, (user_id, user_name) in enumerate(users, start=1):
+                    user_label = f"[{position}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
                     event_type = get_next_notification_for_user(user_id, db_engine=engine)
                     if event_type is None:
                         skipped_count += 1
-                        logger.info("[SKIP] user_id=%s reason=no eligible notification", user_id)
+                        logger.info("%s", user_label)
+                        logger.info("        Status            : SKIPPED")
+                        logger.info("        Reason            : No eligible notification")
                         continue
 
-                    if has_notification_for_user_on_date(user_id, event_type, db_engine=engine):
+                    if not test_mode and has_notification_for_user_on_date(
+                        user_id,
+                        event_type,
+                        db_engine=engine,
+                    ):
                         skipped_count += 1
-                        logger.info("[SKIP] user_id=%s reason=notification already exists for today", user_id)
+                        logger.info("%s", user_label)
+                        logger.info("        Status            : SKIPPED")
+                        logger.info("        Reason            : Notification already exists for today")
                         continue
 
                     flow = FLOW_BY_EVENT_TYPE[event_type]
@@ -76,23 +95,34 @@ def main() -> None:
                         result = service.build_notification(NotificationRequest(user_id=user_id, flow=flow))
                         if result is None:
                             skipped_count += 1
-                            logger.info("[SKIP] user_id=%s reason=no notification generated", user_id)
+                            logger.info("%s", user_label)
+                            logger.info("        Status            : SKIPPED")
+                            logger.info(
+                                "        Reason            : %s",
+                                getattr(service, "last_skip_reason", None) or "MISSING_REQUIRED_DATA",
+                            )
                             continue
                         if result.remote_send_status == "failed":
                             failed_count += 1
                             logger.error(
-                                "[ERROR] Failed notification user_id=%s flow=%s error=%s",
-                                user_id,
-                                flow,
+                                "%s\n        Notification Type : %s\n        Status            : FAILED\n        Reason            : %s",
+                                user_label,
+                                result.notification_type,
                                 result.error or "unknown send failure",
                             )
                             continue
 
-                        processed_count += 1
-                        logger.info("[SUCCESS] Notification processed successfully user_id=%s flow=%s", user_id, flow)
+                        successful_count += 1
+                        logger.info("%s", user_label)
+                        logger.info("        Notification Type : %s", result.notification_type)
+                        logger.info("        Status            : SUCCESS")
                     except Exception as exc:
                         failed_count += 1
-                        logger.exception("[ERROR] Failed notification user_id=%s flow=%s error=%s", user_id, flow, exc)
+                        logger.exception(
+                            "%s\n        Status            : FAILED\n        Reason            : %s",
+                            user_label,
+                            exc,
+                        )
             finally:
                 lock_connection.execute(
                     text("SELECT pg_advisory_unlock(:lock_key)"),
@@ -103,16 +133,17 @@ def main() -> None:
         raise
     finally:
         ended_at = datetime.now(SCHEDULER_TIMEZONE)
-        logger.info("[JOB] Job ENDED")
-        logger.info("[JOB] End timestamp in IST: %s", ended_at.isoformat())
-        logger.info("[JOB] Total execution duration: %s", ended_at - started_at)
-        logger.info(
-            "[JOB] Overall completion status: %s (successful=%d skipped=%d failed=%d)",
-            "COMPLETED" if failed_count == 0 else "COMPLETED_WITH_ERRORS",
-            processed_count,
-            skipped_count,
-            failed_count,
-        )
+        logger.info("")
+        logger.info("-" * 60)
+        logger.info("[JOB] SUMMARY")
+        logger.info("-" * 60)
+        logger.info("[JOB] Total Users : %d", total_users)
+        logger.info("[JOB] Successful  : %d", successful_count)
+        logger.info("[JOB] Skipped     : %d", skipped_count)
+        logger.info("[JOB] Failed      : %d", failed_count)
+        logger.info("-" * 60)
+        logger.info("[JOB] COMPLETED")
+        logger.info("=" * 60)
 
 
 if __name__ == "__main__":

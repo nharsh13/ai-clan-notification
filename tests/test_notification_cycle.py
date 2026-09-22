@@ -1,9 +1,11 @@
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.database.notification_repository import (
     determine_user_cycle_day,
     get_next_manual_notification_for_user,
     get_next_notification_for_user,
+    has_notification_for_user_on_date,
     schedule_next_notification_for_user,
 )
 
@@ -33,6 +35,7 @@ class FakeConnection:
             self.rows_by_user.setdefault(user_id, []).append({
                 "event_type": params["event_type"],
                 "created_at": params.get("created_at", datetime.now(timezone.utc)),
+                "status": 1,
             })
             return FakeResult([])
 
@@ -44,7 +47,8 @@ class FakeConnection:
             rows = [
                 row for row in rows
                 if row.get("event_type") == params["event_type"]
-                and row.get("created_at").date() == params["created_on"]
+                and row.get("status", 1) == 1
+                and row.get("created_at").astimezone(ZoneInfo("Asia/Kolkata")).date() == params["created_on"]
             ]
         return FakeResult(rows)
 
@@ -67,6 +71,84 @@ class FakeEngine:
 
     def begin(self):
         return FakeConnection(self.rows_by_user)
+
+
+def test_notification_at_2330_utc_is_current_ist_day():
+    engine = FakeEngine({953: [{
+        "event_type": "SENTIMENT_QA",
+        "created_at": datetime(2026, 9, 22, 23, 30, tzinfo=timezone.utc),
+    }]})
+
+    assert has_notification_for_user_on_date(
+        953,
+        "SENTIMENT_QA",
+        db_engine=engine,
+        as_of_date=date(2026, 9, 23),
+    ) is True
+
+
+def test_notification_at_0030_utc_is_current_ist_day():
+    engine = FakeEngine({953: [{
+        "event_type": "SENTIMENT_QA",
+        "created_at": datetime(2026, 9, 22, 0, 30, tzinfo=timezone.utc),
+    }]})
+
+    assert has_notification_for_user_on_date(
+        953,
+        "SENTIMENT_QA",
+        db_engine=engine,
+        as_of_date=date(2026, 9, 22),
+    ) is True
+
+
+def test_notification_from_previous_ist_day_is_not_current():
+    engine = FakeEngine({953: [{
+        "event_type": "SENTIMENT_QA",
+        "created_at": datetime(2026, 9, 21, 17, 0, tzinfo=timezone.utc),
+    }]})
+
+    assert has_notification_for_user_on_date(
+        953,
+        "SENTIMENT_QA",
+        db_engine=engine,
+        as_of_date=date(2026, 9, 22),
+    ) is False
+
+
+def test_current_active_notification_matches_same_user_and_event_type():
+    engine = FakeEngine({953: [{
+        "event_type": "SENTIMENT_ENGAGEMENT",
+        "status": 1,
+        "created_at": datetime(2026, 9, 22, 3, 0, tzinfo=timezone.utc),
+    }]})
+
+    assert has_notification_for_user_on_date(
+        953,
+        "SENTIMENT_ENGAGEMENT",
+        db_engine=engine,
+        as_of_date=date(2026, 9, 22),
+    ) is True
+
+
+def test_different_user_or_event_type_does_not_match():
+    engine = FakeEngine({953: [{
+        "event_type": "SENTIMENT_ENGAGEMENT",
+        "status": 1,
+        "created_at": datetime(2026, 9, 22, 3, 0, tzinfo=timezone.utc),
+    }]})
+
+    assert has_notification_for_user_on_date(
+        954,
+        "SENTIMENT_ENGAGEMENT",
+        db_engine=engine,
+        as_of_date=date(2026, 9, 22),
+    ) is False
+    assert has_notification_for_user_on_date(
+        953,
+        "SENTIMENT_QA",
+        db_engine=engine,
+        as_of_date=date(2026, 9, 22),
+    ) is False
 
 
 def test_day_1_user_cycle():
