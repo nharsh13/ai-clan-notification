@@ -1,8 +1,8 @@
 import asyncio
+import inspect
 import logging
 import os
 import sys
-import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -51,12 +51,22 @@ async def _process_user_async(
     total_users: int,
     test_mode: bool,
     semaphore: asyncio.Semaphore,
+    completion_counter: dict[str, int] | None = None,
+    completion_counter_lock: asyncio.Lock | None = None,
 ) -> dict:
-    user_label = f"[{position}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
+    async def _mark_completion() -> int:
+        if completion_counter is not None and completion_counter_lock is not None:
+            async with completion_counter_lock:
+                completion_counter["value"] += 1
+                return completion_counter["value"]
+        return position
+
     async with semaphore:
         try:
             event_type = get_next_notification_for_user(user_id, db_engine=engine)
             if event_type is None:
+                completion_index = await _mark_completion()
+                user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
                 logger.info("%s", user_label)
                 logger.info("        Status            : SKIPPED")
                 logger.info("        Reason            : No eligible notification")
@@ -67,6 +77,8 @@ async def _process_user_async(
                 event_type,
                 db_engine=engine,
             ):
+                completion_index = await _mark_completion()
+                user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
                 logger.info("%s", user_label)
                 logger.info("        Status            : SKIPPED")
                 logger.info("        Reason            : Notification already exists for today")
@@ -80,6 +92,8 @@ async def _process_user_async(
             else:
                 result = await asyncio.to_thread(service.build_notification, NotificationRequest(user_id=user_id, flow=flow))
             if result is None:
+                completion_index = await _mark_completion()
+                user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
                 logger.info("%s", user_label)
                 logger.info("        Status            : SKIPPED")
                 logger.info(
@@ -88,6 +102,8 @@ async def _process_user_async(
                 )
                 return {"status": "skipped", "user_id": user_id, "reason": getattr(service, "last_skip_reason", None) or "MISSING_REQUIRED_DATA"}
             if result.remote_send_status == "failed":
+                completion_index = await _mark_completion()
+                user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
                 logger.error(
                     "%s\n        Notification Type : %s\n        Status            : FAILED\n        Reason            : %s",
                     user_label,
@@ -96,23 +112,15 @@ async def _process_user_async(
                 )
                 return {"status": "failed", "user_id": user_id, "reason": result.error or "unknown send failure"}
 
-            timings = getattr(service, "timings", {})
+            completion_index = await _mark_completion()
+            user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
             logger.info("%s", user_label)
             logger.info("        Notification Type : %s", result.notification_type)
-            logger.info("        DB Context        : %.2fs", timings.get("DB Context", 0.0))
-            if "Recommendation" in timings:
-                logger.info("        Recommendation    : %.2fs", timings["Recommendation"])
-            if "LLM" in timings:
-                logger.info("        LLM               : %.2fs", timings["LLM"])
-            if "Remote API" in timings:
-                logger.info("        Remote API        : %.2fs", timings["Remote API"])
-            total_elapsed = timings.get("Total", 0.0)
-            if not total_elapsed:
-                total_elapsed = sum(timings.values())
-            logger.info("        Total             : %.2fs", total_elapsed)
             logger.info("        Status            : SUCCESS")
             return {"status": "success", "user_id": user_id, "notification_type": result.notification_type}
         except Exception as exc:
+            completion_index = await _mark_completion()
+            user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
             logger.exception(
                 "%s\n        Status            : FAILED\n        Reason            : %s",
                 user_label,
@@ -129,19 +137,28 @@ async def run_scheduler_async(test_mode: bool | None = None) -> dict:
     failed_count = 0
     skipped_count = 0
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_USERS)
-    tasks = [
-        asyncio.create_task(
-            _process_user_async(
-                user_id=user_id,
-                user_name=user_name,
-                position=position,
-                total_users=total_users,
-                test_mode=test_mode,
-                semaphore=semaphore,
-            )
-        )
-        for position, (user_id, user_name) in enumerate(users, start=1)
-    ]
+    completion_counter = {"value": 0}
+    completion_lock = asyncio.Lock()
+    task_kwargs = {
+        "user_id": None,
+        "user_name": None,
+        "position": None,
+        "total_users": total_users,
+        "test_mode": test_mode,
+        "semaphore": semaphore,
+    }
+    supports_completion_tracking = "completion_counter" in inspect.signature(_process_user_async).parameters
+    if supports_completion_tracking:
+        task_kwargs["completion_counter"] = completion_counter
+        task_kwargs["completion_counter_lock"] = completion_lock
+
+    tasks = []
+    for position, (user_id, user_name) in enumerate(users, start=1):
+        item_kwargs = dict(task_kwargs)
+        item_kwargs["user_id"] = user_id
+        item_kwargs["user_name"] = user_name
+        item_kwargs["position"] = position
+        tasks.append(asyncio.create_task(_process_user_async(**item_kwargs)))
     results = await asyncio.gather(*tasks)
     for result in results:
         if isinstance(result, dict):

@@ -1,6 +1,9 @@
+import asyncio
+
 import pytest
 
 import app.notifications.service as service_module
+import scripts.run_daily as run_daily
 from app.notifications.models import NotificationRequest
 
 
@@ -827,3 +830,187 @@ def test_sentiment_history_failure_is_reported_as_failed(monkeypatch):
 
     assert result.remote_send_status == "failed"
     assert result.error == "history insert failed"
+
+
+def test_concurrent_performance_notifications_are_isolated_by_user(monkeypatch):
+    async def run_test():
+        user_profiles = {
+            101: {"user_name": "USER_A", "app_language_code": "en", "video_language_ids": [11], "weakest_kii": {"kii_name": "Focus", "kii_id": 1001}},
+            102: {"user_name": "USER_B", "app_language_code": "hi", "video_language_ids": [22], "weakest_kii": {"kii_name": "Consistency", "kii_id": 1002}},
+            103: {"user_name": "USER_C", "app_language_code": "ta", "video_language_ids": [33], "weakest_kii": {"kii_name": "Planning", "kii_id": 1003}},
+            104: {"user_name": "USER_D", "app_language_code": "te", "video_language_ids": [44], "weakest_kii": {"kii_name": "Communication", "kii_id": 1004}},
+            105: {"user_name": "USER_E", "app_language_code": "fr", "video_language_ids": [55], "weakest_kii": {"kii_name": "Execution", "kii_id": 1005}},
+        }
+
+        monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: user_profiles[user_id])
+        monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {"performance": [], "improvement_area": user_profiles[user_id]["weakest_kii"]})
+        monkeypatch.setattr(
+            service_module,
+            "recommend_video",
+            lambda performance, language_id, embed, db_engine, user_id: {"video_id": user_id * 10, "title": f"Video for {user_profiles[user_id]['user_name']}"},
+        )
+
+        prompt_records = {}
+        payload_records = {}
+
+        class RecordingGenerator:
+            def generate(self, prompt, **kwargs):
+                user_id = kwargs.get("user_id")
+                prompt_records[user_id] = prompt
+                parsed_name = prompt.split("User: ", 1)[1].splitlines()[0].strip()
+                return {
+                    "title": f"Hello {parsed_name}, keep moving",
+                    "description": f"Your focus area is {user_profiles[user_id]['weakest_kii']['kii_name']}",
+                    "action": "Watch now",
+                }
+
+            async def generate_async(self, prompt, **kwargs):
+                return self.generate(prompt, **kwargs)
+
+        class RecordingSender:
+            def __init__(self):
+                self.calls = []
+                self.remote_url = "https://example.test/notify"
+
+            def send(self, **kwargs):
+                payload_records[kwargs["user_id"]] = kwargs
+                self.calls.append(kwargs)
+                return {"status": "ok", "payload": kwargs}
+
+            async def send_async(self, **kwargs):
+                return self.send(**kwargs)
+
+        async def process_user(user_id: int):
+            sender = RecordingSender()
+            generator = RecordingGenerator()
+            service = service_module.NotificationService(sender=sender, generator=generator)
+            result = await service.build_notification_async(NotificationRequest(user_id=user_id, flow="performance", should_send=True))
+            return {
+                "user_id": result.user_id,
+                "user_name": user_profiles[user_id]["user_name"],
+                "prompt": prompt_records[user_id],
+                "payload": payload_records[user_id],
+                "title": result.title,
+                "description": result.description,
+            }
+
+        results = await asyncio.gather(*(process_user(user_id) for user_id in sorted(user_profiles)))
+
+        for user_id in sorted(user_profiles):
+            record = next(item for item in results if item["user_id"] == user_id)
+            profile = user_profiles[user_id]
+            prompt = record["prompt"]
+            payload = record["payload"]
+
+            assert profile["user_name"] in prompt
+            assert f"User: {profile['user_name']}" in prompt
+            assert profile["app_language_code"].upper() in prompt or profile["app_language_code"].lower() in prompt
+            assert profile["weakest_kii"]["kii_name"] in prompt or profile["weakest_kii"]["kii_name"] in record["description"]
+            assert payload["user_id"] == user_id
+            assert payload["notification_type"] == "VIDEO_RECOMMENDATION"
+            assert profile["user_name"] in payload["title"]
+
+            for other_user_id, other_profile in user_profiles.items():
+                if other_user_id == user_id:
+                    continue
+                assert other_profile["user_name"] not in prompt
+                assert other_profile["user_name"] not in payload["title"]
+                assert other_profile["user_name"] not in payload["description"]
+
+        assert run_daily.MAX_CONCURRENT_USERS == 5
+
+    asyncio.run(run_test())
+
+
+def test_scheduler_concurrency_preserves_each_user_context(monkeypatch):
+    async def run_test():
+        users = [(101, "USER_A"), (102, "USER_B"), (103, "USER_C"), (104, "USER_D"), (105, "USER_E")]
+        seen = []
+
+        monkeypatch.setattr(run_daily, "_collect_users", lambda: users)
+        monkeypatch.setattr(run_daily, "get_next_notification_for_user", lambda user_id, db_engine=None, **kwargs: "VIDEO_RECOMMENDATION")
+        monkeypatch.setattr(run_daily, "has_notification_for_user_on_date", lambda *args, **kwargs: False)
+
+        async def fake_build_notification_async(self, request, *args, **kwargs):
+            user_id = request.user_id
+            seen.append({"user_id": user_id, "flow": request.flow})
+            return type(
+                "Result",
+                (),
+                {
+                    "user_id": user_id,
+                    "notification_type": "VIDEO_RECOMMENDATION",
+                    "remote_send_status": "sent",
+                    "error": None,
+                    "title": f"Hello {next(name for uid, name in users if uid == user_id)}, keep going",
+                    "description": f"User {user_id} update",
+                },
+            )()
+
+        monkeypatch.setattr(service_module.NotificationService, "build_notification_async", fake_build_notification_async)
+
+        summary = await run_daily.run_scheduler_async(test_mode=True)
+
+        assert summary["total_users"] == 5
+        assert summary["successful_count"] == 5
+        assert summary["failed_count"] == 0
+        assert summary["skipped_count"] == 0
+        assert {item["user_id"] for item in seen} == {101, 102, 103, 104, 105}
+        assert len(seen) == 5
+
+    asyncio.run(run_test())
+
+
+def test_negative_cross_contamination_does_not_leak_other_user_names(monkeypatch):
+    async def run_test():
+        user_profiles = {
+            101: {"user_name": "USER_A", "app_language_code": "en", "video_language_ids": [11], "weakest_kii": {"kii_name": "Focus", "kii_id": 1001}},
+            102: {"user_name": "USER_B", "app_language_code": "hi", "video_language_ids": [22], "weakest_kii": {"kii_name": "Consistency", "kii_id": 1002}},
+            103: {"user_name": "USER_C", "app_language_code": "ta", "video_language_ids": [33], "weakest_kii": {"kii_name": "Planning", "kii_id": 1003}},
+        }
+
+        monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: user_profiles[user_id])
+        monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {"performance": [], "improvement_area": user_profiles[user_id]["weakest_kii"]})
+        monkeypatch.setattr(
+            service_module,
+            "recommend_video",
+            lambda performance, language_id, embed, db_engine, user_id: {"video_id": user_id * 10, "title": f"Video for {user_profiles[user_id]['user_name']}"},
+        )
+
+        recorded = []
+
+        class RecordingGenerator:
+            def generate(self, prompt, **kwargs):
+                name = prompt.split("User: ", 1)[1].splitlines()[0].strip()
+                recorded.append({"user_id": kwargs["user_id"], "name": name, "prompt": prompt})
+                return {"title": f"Hello {name}, keep moving", "description": f"Your focus is {user_profiles[kwargs['user_id']]['weakest_kii']['kii_name']}", "action": "Watch now"}
+
+            async def generate_async(self, prompt, **kwargs):
+                return self.generate(prompt, **kwargs)
+
+        class RecordingSender:
+            def __init__(self):
+                self.calls = []
+                self.remote_url = "https://example.test/notify"
+
+            def send(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"status": "ok", "payload": kwargs}
+
+            async def send_async(self, **kwargs):
+                return self.send(**kwargs)
+
+        async def process_user(user_id: int):
+            service = service_module.NotificationService(sender=RecordingSender(), generator=RecordingGenerator())
+            await service.build_notification_async(NotificationRequest(user_id=user_id, flow="performance", should_send=True))
+
+        await asyncio.gather(*(process_user(uid) for uid in sorted(user_profiles)))
+
+        for entry in recorded:
+            for other_name in {profile["user_name"] for profile in user_profiles.values()} - {entry["name"]}:
+                assert other_name not in entry["prompt"]
+                assert other_name not in entry["name"]
+
+        assert {entry["name"] for entry in recorded} == {"USER_A", "USER_B", "USER_C"}
+
+    asyncio.run(run_test())
