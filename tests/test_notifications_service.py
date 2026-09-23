@@ -1061,10 +1061,11 @@ def test_scheduler_concurrency_preserves_each_user_context(monkeypatch):
             return type(
                 "Result",
                 (),
-                {
-                    "user_id": user_id,
+                    {
+                        "user_id": user_id,
                     "notification_type": "VIDEO_RECOMMENDATION",
                     "remote_send_status": "sent",
+                    "remote_send_response": {"status_code": 200},
                     "error": None,
                     "title": f"Hello {next(name for uid, name in users if uid == user_id)}, keep going",
                     "description": f"User {user_id} update",

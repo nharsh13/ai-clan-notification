@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import os
 
 import pytest
 import requests
@@ -47,6 +49,19 @@ class FakeOpenAIClient:
                 "action": "Watch now",
             }),
         )
+
+
+def test_scheduler_config_disables_hf_terminal_noise(monkeypatch):
+    monkeypatch.delenv("HF_HUB_DISABLE_PROGRESS_BARS", raising=False)
+    monkeypatch.delenv("HF_HUB_DISABLE_TELEMETRY", raising=False)
+
+    run_daily.configure_terminal_logging()
+
+    assert os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
+    assert os.environ["HF_HUB_DISABLE_TELEMETRY"] == "1"
+    assert logging.getLogger("huggingface_hub").level >= logging.ERROR
+    assert logging.getLogger("sentence_transformers").level >= logging.ERROR
+    assert logging.getLogger("transformers").level >= logging.ERROR
 
 
 def test_openai_retries_temporary_failures_with_expected_backoff(monkeypatch):
@@ -237,6 +252,163 @@ def test_sender_does_not_retry_permanent_http_failure(monkeypatch):
     assert sleeps == []
 
 
+def test_sender_retry_eventually_succeeds_and_is_final_success(monkeypatch):
+    attempts = []
+    responses = [
+        requests.Timeout("timeout"),
+        FakeResponse(status_code=200, body={"ok": True}),
+    ]
+
+    def post(*args, **kwargs):
+        attempts.append(1)
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr("app.notifications.sender.requests.post", post)
+    monkeypatch.setattr("app.notifications.sender.time.sleep", lambda _: None)
+
+    result = NotificationSender(remote_url="https://example.test").send(
+        user_id=2438,
+        notification_type="SENTIMENT_QA",
+        title="Title",
+        description="Description",
+        reference_id=0,
+    )
+
+    assert result["status_code"] == 200
+    assert result["request_payload"][0]["notification_type"] == "SENTIMENT_QA"
+    assert len(attempts) == 2
+
+
+def test_scheduler_skip_status_is_not_logged_as_failed_and_retry_loggers_are_silenced(caplog):
+    run_daily.configure_terminal_logging()
+
+    assert logging.getLogger("urllib3").level >= logging.ERROR
+    assert logging.getLogger("urllib3.connectionpool").level >= logging.ERROR
+    assert logging.getLogger("requests.packages.urllib3").level >= logging.ERROR
+
+    with caplog.at_level("INFO", logger=run_daily.logger.name):
+        run_daily._log_user_status(
+            position=1,
+            total_users=1,
+            user_id=2526,
+            user_name="Karthik",
+            notification_type="VIDEO_RECOMMENDATION",
+            status="SKIPPED",
+        )
+
+    output = caplog.text
+    assert "STATUS : SKIPPED" in output
+    assert "| SKIPPED" in output
+    assert "| FAILED" not in output
+
+
+def test_started_status_does_not_emit_a_final_remote_outcome(caplog):
+    with caplog.at_level("INFO", logger=run_daily.logger.name):
+        run_daily._log_user_status(
+            position=1, total_users=1, user_id=7, user_name="User 7",
+            notification_type="SENTIMENT_QA", status="STARTED",
+        )
+
+    assert "STATUS : STARTED" in caplog.text
+    assert "[REMOTE]" not in caplog.text
+    assert "SKIPPED" not in caplog.text
+    assert "FAILED" not in caplog.text
+
+
+def test_retry_library_terminal_logger_is_suppressed(caplog):
+    run_daily.configure_terminal_logging()
+    retry_logger = logging.getLogger("openai._base_client")
+    retry_logger.info("Retrying request to https://example.test in 0.491939 seconds")
+
+    assert "Retrying request in" not in caplog.text
+
+
+def test_scheduler_emits_one_final_outcome_and_summary_counts(monkeypatch, caplog):
+    engine = FakeSchedulerEngine([11, 12, 13, 14])
+
+    class Result:
+        notification_type = "SENTIMENT_QA"
+        error = None
+        reason = None
+
+        def __init__(self, status, code=None):
+            self.remote_send_status = status
+            self.remote_send_response = {"status_code": code} if code is not None else None
+
+    class Service:
+        last_skip_reason = "NO_ENGAGEMENT_DATA"
+
+        def build_notification(self, request):
+            if request.user_id == 11:
+                return Result("sent", 200)
+            if request.user_id == 12:
+                return Result("failed", 503)
+            if request.user_id == 14:
+                return Result("skipped")
+            return None
+
+    monkeypatch.setattr(run_daily, "engine", engine)
+    monkeypatch.setattr(run_daily, "NotificationService", Service)
+    monkeypatch.setattr(run_daily, "get_next_notification_for_user", lambda *a, **k: "SENTIMENT_QA")
+    monkeypatch.setattr(run_daily, "has_notification_for_user_on_date", lambda *a, **k: False)
+    with caplog.at_level("INFO", logger=run_daily.logger.name):
+        summary = asyncio.run(run_daily.run_scheduler_async(test_mode=True))
+
+    final_status_lines = [line for line in caplog.text.splitlines() if "STATUS : " in line and "STARTED" not in line]
+    assert sum("SUCCESS" in line for line in final_status_lines) == 1
+    assert sum("FAILED" in line for line in final_status_lines) == 2
+    assert sum("SKIPPED" in line for line in final_status_lines) == 1
+    assert summary["total_users"] == 4
+    assert summary["successful_count"] == 1
+    assert summary["failed_count"] == 2
+    assert summary["skipped_count"] == 1
+
+
+def test_scheduler_counts_final_outcome_after_retry_success_and_final_failure(monkeypatch):
+    engine = FakeSchedulerEngine([1, 2, 3])
+
+    class FinalSuccessResult:
+        def __init__(self):
+            self.notification_type = "SENTIMENT_QA"
+            self.remote_send_status = "sent"
+            self.remote_send_response = {"status_code": 200}
+            self.error = None
+            self.reason = None
+
+    class FinalFailureResult:
+        def __init__(self):
+            self.notification_type = "SENTIMENT_QA"
+            self.remote_send_status = "failed"
+            self.remote_send_response = {"status_code": 500}
+            self.error = "remote permanently failed"
+            self.reason = "remote permanently failed"
+
+    class FakeService:
+        last_skip_reason = None
+
+        def build_notification(self, request):
+            if request.user_id == 1:
+                return FinalSuccessResult()
+            if request.user_id == 2:
+                return FinalFailureResult()
+            return None
+
+    monkeypatch.setattr(run_daily, "engine", engine)
+    monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
+    monkeypatch.setattr(run_daily, "get_next_notification_for_user", lambda *args, **kwargs: "SENTIMENT_QA")
+    monkeypatch.setattr(run_daily, "has_notification_for_user_on_date", lambda *args, **kwargs: False)
+
+    summary = asyncio.run(run_daily.run_scheduler_async(test_mode=True))
+
+    assert summary["total_users"] == 3
+    assert summary["successful_count"] == 1
+    assert summary["failed_count"] == 1
+    assert summary["skipped_count"] == 1
+
+
 class FakeScalarResult:
     def __init__(self, value):
         self.value = value
@@ -386,6 +558,7 @@ def test_scheduler_logs_progress_names_types_and_skip_reasons(monkeypatch, caplo
 
         def __init__(self, notification_type):
             self.notification_type = notification_type
+            self.remote_send_response = {"status_code": 200}
 
     class FakeService:
         last_skip_reason = "NO_ENGAGEMENT_DATA"
@@ -412,20 +585,23 @@ def test_scheduler_logs_progress_names_types_and_skip_reasons(monkeypatch, caplo
         run_daily.main()
 
     output = caplog.text
-    assert "[1/4] USER ID: 1 | Name: User 1" in output
-    assert "[2/4] USER ID: 2 | Name: User 2" in output
-    assert "[3/4] USER ID: 3 | Name: User 3" in output
-    assert "[4/4] USER ID: 4 | Name: User 4" in output
-    assert "Notification Type : VIDEO_RECOMMENDATION" in output
-    assert "Notification Type : SENTIMENT_ENGAGEMENT" in output
-    assert "Notification Type : SENTIMENT_QA" in output
-    assert "Reason            : NO_ENGAGEMENT_DATA" in output
-    assert "[JOB] Eligible users got the notification" in output
+    assert "[1/4] USER 1 | User 1" in output
+    assert "[2/4] USER 2 | User 2" in output
+    assert "[3/4] USER 3 | User 3" in output
+    assert "[4/4] USER 4 | User 4" in output
+    assert "TYPE   : VIDEO_RECOMMENDATION" in output
+    assert "TYPE   : SENTIMENT_ENGAGEMENT" in output
+    assert "TYPE   : SENTIMENT_QA" in output
+    assert "STATUS : SUCCESS" in output
+    assert "STATUS : SKIPPED" in output
+    assert "[REMOTE] USER 1 | HTTP 200 | SUCCESS" in output
+    assert "[JOB] SUMMARY" in output
+    assert "[JOB] Total Users : 4" in output
+    assert "[JOB] Successful  : 3" in output
+    assert "[JOB] Failed      : 0" in output
+    assert "[JOB] Skipped     : 1" in output
     assert "[JOB] COMPLETED" in output
-    assert "[JOB] Total Users :" not in output
-    assert "[JOB] Successful" not in output
-    assert "[JOB] Skipped" not in output
-    assert "[JOB] Failed" not in output
+    assert "[JOB] Eligible users got the notification" not in output
     assert "Campaign day" not in output
 
 
@@ -462,7 +638,7 @@ def test_scheduler_test_mode_bypasses_only_duplicate_check(monkeypatch, caplog):
         run_daily.main()
 
     assert processed == [953]
-    assert "TEST MODE: ENABLED - today's duplicate check is bypassed" in caplog.text
+    assert "[JOB] TEST MODE: ENABLED" in caplog.text
 
 
 def test_scheduler_normal_mode_keeps_duplicate_skip(monkeypatch):
@@ -516,6 +692,7 @@ def test_scheduler_uses_default_fallback_without_manual_flag(monkeypatch):
     class FakeResult:
         def __init__(self):
             self.remote_send_status = "sent"
+            self.remote_send_response = {"status_code": 200}
             self.notification_type = "VIDEO_RECOMMENDATION"
             self.reason = "NO_VIDEO_RECOMMENDATION"
             self.error = None

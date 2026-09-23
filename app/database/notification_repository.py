@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from app.constants import NEXT_NOTIFICATION_BY_EVENT_TYPE, NOTIFICATION_CYCLE
 from app.database.connection import engine
@@ -51,19 +51,16 @@ def determine_user_cycle_day(user_id: int, *, db_engine=engine, as_of_date: date
     if not valid_history:
         return 1
 
-    first_event_date = valid_history[0]["created_at"].date()
-    today = as_of_date or datetime.now(timezone.utc).date()
+    ist = ZoneInfo("Asia/Kolkata")
+    first_event_date = valid_history[0]["created_at"].astimezone(ist).date()
+    today = as_of_date or datetime.now(ist).date()
     days_since_start = (today - first_event_date).days
     return ((days_since_start % 7) + 1)
 
 
 def get_next_notification_for_user(user_id: int, *, db_engine=engine, as_of_date: date | None = None) -> str | None:
-    cycle_day = determine_user_cycle_day(user_id, db_engine=db_engine, as_of_date=as_of_date)
-    if cycle_day == 7:
-        return None
-    if cycle_day not in NOTIFICATION_CYCLE:
-        return None
-    return NOTIFICATION_CYCLE[cycle_day]
+    # Keep as_of_date for callers that still pass it; event sequencing is history-based.
+    return get_next_manual_notification_for_user(user_id, db_engine=db_engine)
 
 
 def get_next_manual_notification_for_user(user_id: int, *, db_engine=engine) -> str:
@@ -73,21 +70,22 @@ def get_next_manual_notification_for_user(user_id: int, *, db_engine=engine) -> 
         FROM public.notification
         WHERE target_user_id = :user_id
           AND status = 1
-        ORDER BY id DESC
+          AND event_type IN :valid_event_types
+        ORDER BY created_at DESC, id DESC
         LIMIT 1
         """
-    )
+    ).bindparams(bindparam("valid_event_types", expanding=True))
 
     with db_engine.connect() as connection:
-        row = connection.execute(query, {"user_id": user_id}).mappings().first()
+        row = connection.execute(query, {
+            "user_id": user_id,
+            "valid_event_types": tuple(NEXT_NOTIFICATION_BY_EVENT_TYPE),
+        }).mappings().first()
 
     if row is None:
         return "VIDEO_RECOMMENDATION"
 
-    try:
-        return NEXT_NOTIFICATION_BY_EVENT_TYPE[row["event_type"]]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported notification event type: {row['event_type']}") from exc
+    return NEXT_NOTIFICATION_BY_EVENT_TYPE[row["event_type"]]
 
 
 def has_notification_for_user_on_date(

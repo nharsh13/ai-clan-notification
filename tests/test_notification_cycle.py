@@ -41,7 +41,19 @@ class FakeConnection:
 
         user_id = params.get("user_id") if params else None
         rows = self.rows_by_user.get(user_id, [])
-        if "ORDER BY ID DESC" in q:
+        if params and "valid_event_types" in params:
+            rows = [
+                row for row in rows
+                if row.get("status", 1) == 1
+                and row.get("event_type") in params["valid_event_types"]
+            ]
+        if "ORDER BY CREATED_AT DESC, ID DESC" in q:
+            rows = sorted(
+                rows,
+                key=lambda row: (row.get("created_at"), row.get("id", 0)),
+                reverse=True,
+            )
+        elif "ORDER BY ID DESC" in q:
             rows = sorted(rows, key=lambda row: row.get("id", 0), reverse=True)
         if params and "created_on" in params and rows:
             rows = [
@@ -157,6 +169,18 @@ def test_day_1_user_cycle():
     assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 1)) == "VIDEO_RECOMMENDATION"
 
 
+def test_cycle_day_uses_ist_business_date_across_utc_midnight():
+    engine = FakeEngine({
+        101: [{
+            "event_type": "VIDEO_RECOMMENDATION",
+            "created_at": datetime(2026, 9, 22, 18, 30, tzinfo=timezone.utc),
+        }],
+    })
+
+    assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 9, 23)) == 1
+    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 9, 23)) == "SENTIMENT_ENGAGEMENT"
+
+
 def test_day_2_cycle():
     engine = FakeEngine({101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)}]})
     assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 1, 2)) == 2
@@ -166,13 +190,13 @@ def test_day_2_cycle():
 def test_day_3_cycle():
     engine = FakeEngine({101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)}]})
     assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 1, 3)) == 3
-    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 3)) == "SENTIMENT_QA"
+    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 3)) == "SENTIMENT_ENGAGEMENT"
 
 
 def test_day_4_cycle():
     engine = FakeEngine({101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)}]})
     assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 1, 4)) == 4
-    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 4)) == "VIDEO_RECOMMENDATION"
+    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 4)) == "SENTIMENT_ENGAGEMENT"
 
 
 def test_day_5_cycle():
@@ -184,15 +208,15 @@ def test_day_5_cycle():
 def test_day_6_cycle():
     engine = FakeEngine({101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)}]})
     assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 1, 6)) == 6
-    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 6)) == "SENTIMENT_QA"
+    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 6)) == "SENTIMENT_ENGAGEMENT"
 
 
 def test_day_7_is_break_and_day_8_resets_to_video_recommendation():
     engine = FakeEngine({101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)}]})
     assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 1, 7)) == 7
-    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 7)) is None
+    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 7)) == "SENTIMENT_ENGAGEMENT"
     assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 1, 8)) == 1
-    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 8)) == "VIDEO_RECOMMENDATION"
+    assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 1, 8)) == "SENTIMENT_ENGAGEMENT"
 
 
 def test_new_user_starts_on_day_1():
@@ -210,9 +234,9 @@ def test_no_event_starts_cycle_at_first_valid_notification():
     reset_engine = FakeEngine({
         101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)}],
     })
-    assert get_next_notification_for_user(101, db_engine=reset_engine, as_of_date=date(2026, 1, 7)) is None
+    assert get_next_notification_for_user(101, db_engine=reset_engine, as_of_date=date(2026, 1, 7)) == "SENTIMENT_ENGAGEMENT"
     assert determine_user_cycle_day(101, db_engine=reset_engine, as_of_date=date(2026, 1, 8)) == 1
-    assert get_next_notification_for_user(101, db_engine=reset_engine, as_of_date=date(2026, 1, 8)) == "VIDEO_RECOMMENDATION"
+    assert get_next_notification_for_user(101, db_engine=reset_engine, as_of_date=date(2026, 1, 8)) == "SENTIMENT_ENGAGEMENT"
 
 
 def test_manual_cycle_uses_latest_event_type():
@@ -238,7 +262,7 @@ def test_manual_cycle_starts_with_performance_for_new_user():
     assert get_next_manual_notification_for_user(953, db_engine=FakeEngine()) == "VIDEO_RECOMMENDATION"
 
 
-def test_users_have_independent_cycles():
+def test_cycle_day_calculation_remains_independent_but_does_not_select_event():
     engine = FakeEngine({
         101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)}],
         202: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 3, 3, 9, 0, tzinfo=timezone.utc)}],
@@ -246,11 +270,75 @@ def test_users_have_independent_cycles():
     assert determine_user_cycle_day(101, db_engine=engine, as_of_date=date(2026, 3, 5)) == 5
     assert determine_user_cycle_day(202, db_engine=engine, as_of_date=date(2026, 3, 5)) == 3
     assert get_next_notification_for_user(101, db_engine=engine, as_of_date=date(2026, 3, 5)) == "SENTIMENT_ENGAGEMENT"
-    assert get_next_notification_for_user(202, db_engine=engine, as_of_date=date(2026, 3, 5)) == "SENTIMENT_QA"
+    assert get_next_notification_for_user(202, db_engine=engine, as_of_date=date(2026, 3, 5)) == "SENTIMENT_ENGAGEMENT"
+
+
+def test_scheduler_next_event_rotates_after_each_latest_successful_event():
+    cases = [
+        ("VIDEO_RECOMMENDATION", "SENTIMENT_ENGAGEMENT"),
+        ("SENTIMENT_ENGAGEMENT", "SENTIMENT_QA"),
+        ("SENTIMENT_QA", "VIDEO_RECOMMENDATION"),
+    ]
+    for event_type, expected in cases:
+        engine = FakeEngine({953: [{
+            "id": 10,
+            "event_type": event_type,
+            "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "status": 1,
+        }]})
+        assert get_next_notification_for_user(953, db_engine=engine) == expected
+
+
+def test_scheduler_uses_latest_successful_valid_event_and_ignores_failed_skipped_invalid():
+    engine = FakeEngine({953: [
+        {"id": 10, "event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc), "status": 1},
+        {"id": 20, "event_type": "SENTIMENT_ENGAGEMENT", "created_at": datetime(2026, 1, 2, tzinfo=timezone.utc), "status": 1},
+        {"id": 30, "event_type": "SENTIMENT_QA", "created_at": datetime(2026, 1, 3, tzinfo=timezone.utc), "status": 0},
+        {"id": 35, "event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 3, 12, tzinfo=timezone.utc), "status": 2},
+        {"id": 40, "event_type": "UNRELATED_EVENT", "created_at": datetime(2026, 1, 4, tzinfo=timezone.utc), "status": 1},
+    ]})
+
+    assert get_next_notification_for_user(953, db_engine=engine) == "SENTIMENT_QA"
+
+
+def test_latest_successful_event_tie_breaks_by_id_and_includes_same_day_records():
+    same_time = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    engine = FakeEngine({953: [
+        {"id": 10, "event_type": "VIDEO_RECOMMENDATION", "created_at": same_time, "status": 1},
+        {"id": 11, "event_type": "SENTIMENT_ENGAGEMENT", "created_at": same_time, "status": 1},
+        {"id": 12, "event_type": "SENTIMENT_QA", "created_at": same_time, "status": 0},
+    ]})
+
+    assert get_next_notification_for_user(953, db_engine=engine) == "SENTIMENT_QA"
+
+
+def test_scheduler_event_selection_ignores_date_and_has_no_day_seven_stop():
+    engine = FakeEngine({953: [{
+        "id": 10,
+        "event_type": "SENTIMENT_QA",
+        "created_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+        "status": 1,
+    }]})
+
+    assert get_next_notification_for_user(953, db_engine=engine, as_of_date=date(2026, 1, 7)) == "VIDEO_RECOMMENDATION"
+    assert get_next_notification_for_user(953, db_engine=engine, as_of_date=date(2030, 1, 7)) == "VIDEO_RECOMMENDATION"
 
 
 def test_running_scheduler_twice_does_not_create_duplicates():
-    stored_by_user = {}
+    stored_by_user = {555: [
+        {
+            "id": 1,
+            "event_type": "VIDEO_RECOMMENDATION",
+            "created_at": datetime(2026, 4, 1, 8, 0, tzinfo=timezone.utc),
+            "status": 1,
+        },
+        {
+            "id": 2,
+            "event_type": "SENTIMENT_QA",
+            "created_at": datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+            "status": 1,
+        },
+    ]}
 
     class RecordingEngine:
         def connect(self):
@@ -278,6 +366,5 @@ def test_running_scheduler_twice_does_not_create_duplicates():
         event_details={"source": "scheduler"},
     )
 
-    assert first is not None
+    assert first is None
     assert second is None
-    assert first["event_type"] == "VIDEO_RECOMMENDATION"
