@@ -326,6 +326,29 @@ def test_qa_sentiment_prompt_contains_user_and_qa():
     assert "I listen and make changes." in prompt
 
 
+def test_no_qa_sentiment_prompt_is_distinct_and_encourages_engagement():
+    prompt = llm.build_no_qa_sentiment_notification_prompt(
+        user_name="Rahul",
+        language="English",
+    )
+
+    assert isinstance(prompt, str)
+    assert "Rahul" in prompt
+    assert "English" in prompt
+    assert "daily questions" in prompt.lower()
+    assert "answer more questions regularly" in prompt.lower()
+    assert "share your responses" in prompt.lower()
+    assert "AI-CLAN" in prompt
+
+    answered_prompt = llm.build_qa_sentiment_notification_prompt(
+        user_name="Rahul",
+        language="English",
+        prepared_qa={"questions": [{"question_id": 1, "responses": [{"question": "How do you reflect?", "answer": "I think about it."}]}]},
+    )
+
+    assert prompt != answered_prompt
+
+
 # ============================================================
 # VALIDATE ENGAGEMENT SENTIMENT
 # ============================================================

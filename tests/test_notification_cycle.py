@@ -201,6 +201,20 @@ def test_new_user_starts_on_day_1():
     assert get_next_notification_for_user(999, db_engine=engine, as_of_date=date(2026, 2, 1)) == "VIDEO_RECOMMENDATION"
 
 
+def test_no_event_starts_cycle_at_first_valid_notification():
+    engine = FakeEngine({})
+
+    assert determine_user_cycle_day(555, db_engine=engine, as_of_date=date(2026, 2, 1)) == 1
+    assert get_next_notification_for_user(555, db_engine=engine, as_of_date=date(2026, 2, 1)) == "VIDEO_RECOMMENDATION"
+
+    reset_engine = FakeEngine({
+        101: [{"event_type": "VIDEO_RECOMMENDATION", "created_at": datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)}],
+    })
+    assert get_next_notification_for_user(101, db_engine=reset_engine, as_of_date=date(2026, 1, 7)) is None
+    assert determine_user_cycle_day(101, db_engine=reset_engine, as_of_date=date(2026, 1, 8)) == 1
+    assert get_next_notification_for_user(101, db_engine=reset_engine, as_of_date=date(2026, 1, 8)) == "VIDEO_RECOMMENDATION"
+
+
 def test_manual_cycle_uses_latest_event_type():
     for event_type, expected in [
         ("VIDEO_RECOMMENDATION", "SENTIMENT_ENGAGEMENT"),

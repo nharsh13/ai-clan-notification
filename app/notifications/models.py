@@ -41,6 +41,7 @@ class NotificationProcessingResult(BaseModel):
     flow: FlowName
     should_send: bool = True
 
+    reason: Optional[str] = None
     error: Optional[str] = None
     remote_send_status: Optional[str] = None
     remote_send_response: Optional[dict] = None

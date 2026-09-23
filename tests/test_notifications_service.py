@@ -16,12 +16,24 @@ class DummySender:
         self.calls.append(kwargs)
         return {"status": "ok", "payload": kwargs}
 
+    async def send_async(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"status": "ok", "payload": kwargs}
+
 
 class DummyGenerator:
     def __init__(self):
         self.prompts = []
 
     def generate(self, prompt, **kwargs):
+        self.prompts.append(prompt)
+        return {
+            "title": "Growth Check",
+            "description": "Keep working on the area that needs the most attention.",
+            "action": "Watch now",
+        }
+
+    async def generate_async(self, prompt, **kwargs):
         self.prompts.append(prompt)
         return {
             "title": "Growth Check",
@@ -102,10 +114,12 @@ def test_build_notification_engagement_skips_zero_questions(monkeypatch):
         NotificationRequest(user_id=953, flow="engagement")
     )
 
-    assert result is None
-    assert service.last_skip_reason == "NO_ENGAGEMENT_DATA"
+    assert result is not None
+    assert result.reason == "NO_ENGAGEMENT_DATA"
+    assert "Keep Building Momentum" in result.title
     assert generator.prompts == []
-    assert sender.calls == []
+    assert len(sender.calls) == 1
+    assert sender.calls[0]["notification_type"] == "SENTIMENT_ENGAGEMENT"
 
 
 def test_build_notification_engagement_keeps_positive_threshold(monkeypatch):
@@ -267,10 +281,115 @@ def test_performance_flow_handles_no_video(monkeypatch):
         NotificationRequest(user_id=953, flow="performance", should_send=False)
     )
 
-    assert result is None
-    assert service.last_skip_reason == "NO_VIDEO_RECOMMENDATION"
+    assert result is not None
+    assert result.reason == "NO_VIDEO_RECOMMENDATION"
+    assert result.title.startswith("Ava")
     assert service.generator.prompts == []
     assert service.sender.calls == []
+
+
+def test_performance_flow_can_fallback_when_no_video_and_reason_is_tracked(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: None)
+    service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
+
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="performance", should_send=False),
+        allow_fallback=True,
+    )
+
+    assert result is not None
+    assert result.notification_type == "VIDEO_RECOMMENDATION"
+    assert result.reason == "NO_VIDEO_RECOMMENDATION"
+    assert result.title.startswith("Ava")
+    assert result.description
+
+
+def test_sentiment_flow_calls_llm_when_no_qa_and_sends_generated_notification(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: [])
+    sender = DummySender()
+    generator = DummyGenerator()
+    service = service_module.NotificationService(sender=sender, generator=generator)
+
+    result = service.build_notification(
+        NotificationRequest(user_id=953, flow="sentiment", should_send=True),
+        allow_fallback=True,
+    )
+
+    assert result is not None
+    assert result.notification_type == "SENTIMENT_QA"
+    assert result.reference_id == 0
+    assert result.video_popup is None
+    assert result.image is None
+    assert result.reason is None
+    assert len(generator.prompts) == 1
+    assert "daily questions" in generator.prompts[0].lower()
+    assert len(sender.calls) == 1
+    assert sender.calls[0]["notification_type"] == "SENTIMENT_QA"
+
+
+def test_async_performance_fallback_is_active_by_default(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "calculate_performance", lambda user_id: {
+        "improvement_area": {"kii_id": 117, "kii_name": "Focus", "performance_percentage": 0},
+    })
+    monkeypatch.setattr(service_module, "recommend_video", lambda *args, **kwargs: None)
+
+    service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
+    result = asyncio.run(service.build_notification_async(NotificationRequest(user_id=953, flow="performance", should_send=False)))
+
+    assert result is not None
+    assert result.notification_type == "VIDEO_RECOMMENDATION"
+    assert result.reason == "NO_VIDEO_RECOMMENDATION"
+    assert result.title.startswith("Ava")
+
+
+def test_async_sentiment_no_qa_calls_llm_and_sends_generated_notification(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: [])
+
+    sender = DummySender()
+    generator = DummyGenerator()
+    service = service_module.NotificationService(sender=sender, generator=generator)
+    result = asyncio.run(service.build_notification_async(NotificationRequest(user_id=953, flow="sentiment", should_send=True)))
+
+    assert result is not None
+    assert result.notification_type == "SENTIMENT_QA"
+    assert result.reference_id == 0
+    assert result.video_popup is None
+    assert result.image is None
+    assert result.reason is None
+    assert len(generator.prompts) == 1
+    assert "daily questions" in generator.prompts[0].lower()
+    assert len(sender.calls) == 1
+    assert sender.calls[0]["notification_type"] == "SENTIMENT_QA"
+
+
+def test_async_engagement_no_data_falls_back_without_special_flag(monkeypatch):
+    monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
+        "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
+    })
+    monkeypatch.setattr(service_module, "get_user_response_rate", lambda user_id: None)
+
+    service = service_module.NotificationService(sender=DummySender(), generator=DummyGenerator())
+    result = asyncio.run(service.build_notification_async(NotificationRequest(user_id=953, flow="engagement", should_send=False)))
+
+    assert result is not None
+    assert result.notification_type == "SENTIMENT_ENGAGEMENT"
+    assert result.reason == "NO_ENGAGEMENT_DATA"
+    assert "Keep Building Momentum" in result.title
 
 
 @pytest.mark.parametrize("video_language_id", [9, 3])
@@ -328,8 +447,9 @@ def test_performance_flow_skips_when_hindi_or_telugu_video_is_unavailable(
         NotificationRequest(user_id=953, flow="performance", should_send=False)
     )
 
-    assert result is None
-    assert service.last_skip_reason == "NO_VIDEO_RECOMMENDATION"
+    assert result is not None
+    assert result.reason == "NO_VIDEO_RECOMMENDATION"
+    assert result.title.startswith("Ava")
     assert generator.prompts == []
     assert sender.calls == []
 
@@ -466,7 +586,9 @@ def test_performance_flow_supports_configured_future_video_language(
     )
 
     if recommendation is None:
-        assert result is None
+        assert result is not None
+        assert result.reason == "NO_VIDEO_RECOMMENDATION"
+        assert result.title.startswith("Ava")
         assert generator.prompts == []
     else:
         assert result is not None
@@ -689,22 +811,24 @@ def test_sentiment_saves_all_eligible_history_after_successful_send(monkeypatch)
     assert [row["answer_id"] for row in saved] == [3, 5]
 
 
-def test_sentiment_with_no_eligible_qa_skips_llm_and_sender(monkeypatch):
-    generator = DummyGenerator()
+def test_sentiment_with_no_eligible_qa_calls_llm_and_raises_on_failure(monkeypatch):
+    class FailingGenerator:
+        def generate(self, prompt, **kwargs):
+            raise ValueError("LLM unavailable")
+
     sender = DummySender()
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
     })
     monkeypatch.setattr(service_module, "get_eligible_user_qa", lambda user_id, db_engine=None: [])
 
-    service = service_module.NotificationService(sender=sender, generator=generator)
+    service = service_module.NotificationService(sender=sender, generator=FailingGenerator())
     result = service.build_notification(
         NotificationRequest(user_id=953, flow="sentiment")
     )
 
     assert result is None
-    assert service.last_skip_reason == "NO_QA_DATA"
-    assert generator.prompts == []
+    assert service.last_skip_reason == "LLM_NO_RESPONSE"
     assert sender.calls == []
 
 

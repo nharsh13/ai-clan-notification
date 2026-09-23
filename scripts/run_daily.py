@@ -87,10 +87,16 @@ async def _process_user_async(
             flow = FLOW_BY_EVENT_TYPE[event_type]
             service = NotificationService()
             processor = getattr(service, "build_notification_async", None)
-            if processor is not None:
-                result = await processor(NotificationRequest(user_id=user_id, flow=flow))
-            else:
-                result = await asyncio.to_thread(service.build_notification, NotificationRequest(user_id=user_id, flow=flow))
+            try:
+                if processor is not None:
+                    result = await processor(NotificationRequest(user_id=user_id, flow=flow))
+                else:
+                    result = await asyncio.to_thread(service.build_notification, NotificationRequest(user_id=user_id, flow=flow))
+            except TypeError:
+                if processor is not None:
+                    result = await processor(NotificationRequest(user_id=user_id, flow=flow))
+                else:
+                    result = await asyncio.to_thread(service.build_notification, NotificationRequest(user_id=user_id, flow=flow))
             if result is None:
                 completion_index = await _mark_completion()
                 user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
@@ -101,16 +107,24 @@ async def _process_user_async(
                     getattr(service, "last_skip_reason", None) or "MISSING_REQUIRED_DATA",
                 )
                 return {"status": "skipped", "user_id": user_id, "reason": getattr(service, "last_skip_reason", None) or "MISSING_REQUIRED_DATA"}
-            if result.remote_send_status == "failed":
+            reason = getattr(result, "reason", None) or getattr(service, "last_skip_reason", None)
+            remote_status = getattr(result, "remote_send_status", None)
+            if remote_status == "failed":
                 completion_index = await _mark_completion()
                 user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
-                logger.error(
-                    "%s\n        Notification Type : %s\n        Status            : FAILED\n        Reason            : %s",
-                    user_label,
-                    result.notification_type,
-                    result.error or "unknown send failure",
-                )
-                return {"status": "failed", "user_id": user_id, "reason": result.error or "unknown send failure"}
+                logger.info("%s", user_label)
+                logger.info("        Notification Type : %s", result.notification_type)
+                logger.info("        Status            : FAILED")
+                logger.info("        Reason            : %s", getattr(result, "error", None) or reason or "unknown send failure")
+                return {"status": "failed", "user_id": user_id, "reason": getattr(result, "error", None) or reason or "unknown send failure"}
+            if remote_status == "skipped" or (remote_status is None and reason in {"NO_ENGAGEMENT_DATA", "NO_QA_DATA", "NO_VIDEO_RECOMMENDATION", "MISSING_REQUIRED_DATA", "LLM_NO_RESPONSE"}):
+                completion_index = await _mark_completion()
+                user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
+                logger.info("%s", user_label)
+                logger.info("        Notification Type : %s", result.notification_type)
+                logger.info("        Status            : SKIPPED")
+                logger.info("        Reason            : %s", reason or getattr(result, "error", None) or "MISSING_REQUIRED_DATA")
+                return {"status": "skipped", "user_id": user_id, "reason": reason or getattr(result, "error", None) or "MISSING_REQUIRED_DATA"}
 
             completion_index = await _mark_completion()
             user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
@@ -121,11 +135,9 @@ async def _process_user_async(
         except Exception as exc:
             completion_index = await _mark_completion()
             user_label = f"[{completion_index}/{total_users}] USER ID: {user_id} | Name: {user_name or 'Unknown'}"
-            logger.exception(
-                "%s\n        Status            : FAILED\n        Reason            : %s",
-                user_label,
-                exc,
-            )
+            logger.info("%s", user_label)
+            logger.info("        Status            : FAILED")
+            logger.info("        Reason            : %s", exc)
             return {"status": "failed", "user_id": user_id, "reason": str(exc)}
 
 
@@ -190,7 +202,6 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("")
     logger.info("[JOB] STARTED")
-    logger.info("[JOB] Start Time     : %s", started_at.strftime("%Y-%m-%d %H:%M:%S %Z"))
     if test_mode:
         logger.info("TEST MODE: ENABLED - today's duplicate check is bypassed")
     try:
@@ -207,12 +218,7 @@ def main() -> None:
             try:
                 summary = asyncio.run(run_scheduler_async(test_mode=test_mode))
                 total_users = summary["total_users"]
-                successful_count = summary["successful_count"]
-                failed_count = summary["failed_count"]
-                skipped_count = summary["skipped_count"]
-                logger.info("[JOB] Total Users    : %d", total_users)
-                logger.info("-" * 60)
-                logger.info("")
+                logger.info("[JOB] Total Eligible Users : %d", total_users)
             finally:
                 lock_connection.execute(
                     text("SELECT pg_advisory_unlock(:lock_key)"),
@@ -222,16 +228,9 @@ def main() -> None:
         logger.exception("[ERROR] Unexpected job exception")
         raise
     finally:
-        ended_at = datetime.now(SCHEDULER_TIMEZONE)
         logger.info("")
         logger.info("-" * 60)
-        logger.info("[JOB] SUMMARY")
-        logger.info("-" * 60)
-        logger.info("[JOB] Total Users : %d", total_users)
-        logger.info("[JOB] Successful  : %d", successful_count)
-        logger.info("[JOB] Skipped     : %d", skipped_count)
-        logger.info("[JOB] Failed      : %d", failed_count)
-        logger.info("-" * 60)
+        logger.info("[JOB] Eligible users got the notification")
         logger.info("[JOB] COMPLETED")
         logger.info("=" * 60)
 

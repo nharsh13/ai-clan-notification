@@ -8,6 +8,46 @@ from app.llm.llm_client import (
 )
 
 
+def build_no_qa_sentiment_notification_prompt(
+    user_name: str,
+    language: str,
+) -> str:
+    """
+    Build the prompt for the no-Q&A sentiment fallback notification.
+    """
+
+    return f"""
+Generate ONE personalized CLAN engagement notification.
+
+User: {user_name}
+Language: {language}
+
+Goal:
+Encourage the user to participate in daily questions, answer more questions regularly, share your responses, and engage consistently so AI-CLAN can better understand their needs and provide more relevant support.
+
+Requirements:
+- Use a friendly, positive, simple, and natural tone.
+- Keep it brief and suitable for a short mobile app notification.
+- Encourage participation in the daily questions and regular answering.
+- Encourage the user to share your responses so AI-CLAN can better understand their needs.
+- Make the message feel supportive and motivating, not corrective or negative.
+- Do not mention any internal system details, missing data, no answers, no Q&A, or debugging.
+- Do not say the user has no information or no records.
+- Include the user's name in the title.
+- Write directly in the requested language.
+- Title should be short but meaningful.
+- Description should be brief, clear, actionable, and encouraging.
+
+Return ONLY valid JSON with exactly these two fields:
+{{
+    "title": "string",
+    "description": "string"
+}}
+
+Do not return Markdown, explanations, or additional fields.
+""".strip()
+
+
 def build_qa_sentiment_notification_prompt(
     user_name: str,
     language: str,

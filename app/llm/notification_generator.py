@@ -24,6 +24,7 @@ from app.llm.generate_performance_notification import (
     validate_performance_notification,
 )
 from app.llm.generate_qa_sentiment_notification import (
+    build_no_qa_sentiment_notification_prompt,
     build_qa_sentiment_notification_prompt,
     validate_qa_sentiment_notification,
 )
@@ -202,6 +203,7 @@ __all__ = [
     "_is_temporary_openai_error",
     "_parse_json_response",
     "build_engagement_sentiment_notification_prompt",
+    "build_no_qa_sentiment_notification_prompt",
     "build_qa_sentiment_notification_prompt",
     "build_performance_notification_prompt",
     "generate_engagement_sentiment_notification",

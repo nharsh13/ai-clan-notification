@@ -420,10 +420,12 @@ def test_scheduler_logs_progress_names_types_and_skip_reasons(monkeypatch, caplo
     assert "Notification Type : SENTIMENT_ENGAGEMENT" in output
     assert "Notification Type : SENTIMENT_QA" in output
     assert "Reason            : NO_ENGAGEMENT_DATA" in output
-    assert "[JOB] Total Users : 4" in output
-    assert "[JOB] Successful  : 3" in output
-    assert "[JOB] Skipped     : 1" in output
-    assert "[JOB] Failed      : 0" in output
+    assert "[JOB] Eligible users got the notification" in output
+    assert "[JOB] COMPLETED" in output
+    assert "[JOB] Total Users :" not in output
+    assert "[JOB] Successful" not in output
+    assert "[JOB] Skipped" not in output
+    assert "[JOB] Failed" not in output
     assert "Campaign day" not in output
 
 
@@ -508,6 +510,40 @@ def test_scheduler_skips_sentiment_when_no_eligible_qa(monkeypatch):
     run_daily.main()
 
     assert requests_seen[0].flow == "sentiment"
+
+
+def test_scheduler_uses_default_fallback_without_manual_flag(monkeypatch):
+    class FakeResult:
+        def __init__(self):
+            self.remote_send_status = "sent"
+            self.notification_type = "VIDEO_RECOMMENDATION"
+            self.reason = "NO_VIDEO_RECOMMENDATION"
+            self.error = None
+
+    class FakeService:
+        last_skip_reason = "NO_VIDEO_RECOMMENDATION"
+
+        async def build_notification_async(self, request, **kwargs):
+            assert "allow_fallback" not in kwargs
+            assert request.flow == "performance"
+            return FakeResult()
+
+    monkeypatch.setattr(run_daily, "NotificationService", lambda: FakeService())
+    monkeypatch.setattr(run_daily, "get_next_notification_for_user", lambda *args, **kwargs: "VIDEO_RECOMMENDATION")
+    monkeypatch.setattr(run_daily, "has_notification_for_user_on_date", lambda *args, **kwargs: False)
+    result = asyncio.run(
+        run_daily._process_user_async(
+            953,
+            "Ava",
+            position=1,
+            total_users=1,
+            test_mode=False,
+            semaphore=asyncio.Semaphore(5),
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["user_id"] == 953
 
 
 def test_openai_async_generate_uses_awaited_client_call(monkeypatch):

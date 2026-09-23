@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 import logging
-import time
 
 from sqlalchemy import text
 
@@ -17,6 +16,7 @@ from app.llm.generate_performance_notification import (
     build_performance_notification_prompt,
 )
 from app.llm.generate_qa_sentiment_notification import (
+    build_no_qa_sentiment_notification_prompt,
     build_qa_sentiment_notification_prompt,
 )
 from app.llm.llm_client import NotificationGenerator
@@ -56,7 +56,6 @@ class NotificationService:
         self.db_engine = db_engine
         self.engine = NotificationEngine()
         self.last_skip_reason: str | None = None
-        self.timings: dict[str, float] = {}
 
     def _get_user_profile(
         self,
@@ -111,6 +110,77 @@ class NotificationService:
             language_id = connection.execute(query).scalar_one_or_none()
         return int(language_id) if language_id is not None else None
 
+    def _make_result(
+        self,
+        *,
+        user_id: int,
+        notification_type: str,
+        title: str,
+        description: str,
+        reference_id: int,
+        video_popup: bool | None,
+        flow: str,
+        should_send: bool,
+        reason: str | None = None,
+        history_records: list[dict] | None = None,
+    ) -> NotificationProcessingResult:
+        notification = self.engine.make_notification(
+            user_id=user_id,
+            notification_type=notification_type,
+            title=title,
+            description=description,
+            reference_id=reference_id,
+            video_popup=video_popup,
+        )
+
+        response = NotificationProcessingResult(
+            user_id=notification.user_id,
+            title=notification.title,
+            description=notification.description,
+            notification_type=notification.notification_type,
+            reference_id=notification.reference_id,
+            video_popup=notification.video_popup,
+            image=notification.image,
+            flow=flow,
+            should_send=should_send,
+            reason=reason,
+        )
+
+        if should_send:
+            if not self.sender.remote_url:
+                response.remote_send_status = "skipped"
+                response.reason = reason or "REMOTE_NOTIFICATION_SEND_URL is not configured"
+                response.error = "REMOTE_NOTIFICATION_SEND_URL is not configured"
+            else:
+                try:
+                    remote_response = self.sender.send(
+                        user_id=notification.user_id,
+                        notification_type=notification.notification_type,
+                        title=notification.title,
+                        description=notification.description,
+                        reference_id=notification.reference_id,
+                        video_popup=notification.video_popup,
+                        image=notification.image,
+                    )
+                    response.remote_send_status = "sent"
+                    response.remote_send_response = remote_response
+                    if flow == "sentiment" and history_records:
+                        save_sentiment_notification_history(
+                            history_records,
+                            self.db_engine,
+                        )
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    logger.exception(
+                        "Notification send failed for user=%s flow=%s",
+                        user_id,
+                        flow,
+                    )
+                    response.remote_send_status = "failed"
+                    response.error = str(exc)
+                    response.reason = reason or response.error
+
+        return response
+
     def _generate_llm_notification(self, flow: str, user_name: str, payload: dict[str, Any]) -> dict[str, str]:
         if flow == "engagement":
             prompt = build_engagement_sentiment_notification_prompt(
@@ -119,11 +189,17 @@ class NotificationService:
                 response_data=payload["response_data"],
             )
         elif flow == "sentiment":
-            prompt = build_qa_sentiment_notification_prompt(
-                user_name=user_name,
-                language=payload.get("language", "English"),
-                prepared_qa=payload["prepared_qa"],
-            )
+            if payload.get("prepared_qa"):
+                prompt = build_qa_sentiment_notification_prompt(
+                    user_name=user_name,
+                    language=payload.get("language", "English"),
+                    prepared_qa=payload["prepared_qa"],
+                )
+            else:
+                prompt = build_no_qa_sentiment_notification_prompt(
+                    user_name=user_name,
+                    language=payload.get("language", "English"),
+                )
         else:
             prompt = build_performance_notification_prompt(
                 user_name=user_name,
@@ -150,11 +226,17 @@ class NotificationService:
                 response_data=payload["response_data"],
             )
         elif flow == "sentiment":
-            prompt = build_qa_sentiment_notification_prompt(
-                user_name=user_name,
-                language=payload.get("language", "English"),
-                prepared_qa=payload["prepared_qa"],
-            )
+            if payload.get("prepared_qa"):
+                prompt = build_qa_sentiment_notification_prompt(
+                    user_name=user_name,
+                    language=payload.get("language", "English"),
+                    prepared_qa=payload["prepared_qa"],
+                )
+            else:
+                prompt = build_no_qa_sentiment_notification_prompt(
+                    user_name=user_name,
+                    language=payload.get("language", "English"),
+                )
         else:
             prompt = build_performance_notification_prompt(
                 user_name=user_name,
@@ -178,12 +260,10 @@ class NotificationService:
         user_id: int,
         flow: str,
     ) -> tuple[str, dict[str, Any]] | None:
-        started_at = time.perf_counter()
         profile = self._get_user_profile(
             user_id,
             require_video_language=flow == "performance",
         )
-        self.timings["DB Context"] = time.perf_counter() - started_at
         if profile is None:
             return None
         user_name = str(profile["user_name"]).strip() or f"User {user_id}"
@@ -202,22 +282,12 @@ class NotificationService:
         if flow == "sentiment":
             eligible_responses = get_eligible_user_qa(user_id, self.db_engine)
             if not eligible_responses:
-                self.last_skip_reason = NO_QA_DATA
                 return user_name, {
                     "language": language,
                     "prepared_qa": None,
                     "history_records": [],
                     "context": "your recent responses and workplace reflections",
                 }
-            selection_type = eligible_responses[0].get("selection_type", "NEW")
-            for response in eligible_responses:
-                logger.info(
-                    "Q&A selected user_id=%s question_id=%s answer_id=%s type=%s",
-                    response["user_id"],
-                    response["question_id"],
-                    response["answer_id"],
-                    selection_type,
-                )
             prepared_qa = prepare_user_qa(
                 user_id,
                 self.db_engine,
@@ -249,7 +319,6 @@ class NotificationService:
             (),
             {"kii_name": weakest["kii_name"], "kii_id": weakest["kii_id"]},
         )()
-        recommendation_started_at = time.perf_counter()
         recommendation = recommend_video(
             performance,
             language_id,
@@ -257,7 +326,6 @@ class NotificationService:
             self.db_engine,
             user_id=user_id,
         )
-        self.timings["Recommendation"] = time.perf_counter() - recommendation_started_at
         if recommendation is None:
             self.last_skip_reason = NO_VIDEO_RECOMMENDATION
             return None
@@ -298,14 +366,6 @@ class NotificationService:
             return {"user_id": user_id, "responses": []}
 
         selected_response = eligible_responses[0]
-        selection_type = selected_response.get("selection_type", "NEW")
-        logger.info(
-            "Q&A selected user_id=%s question_id=%s answer_id=%s type=%s",
-            selected_response["user_id"],
-            selected_response["question_id"],
-            selected_response["answer_id"],
-            selection_type,
-        )
 
         return {
             "user_id": user_id,
@@ -323,9 +383,9 @@ class NotificationService:
         *,
         flow: str | None = None,
         should_send: bool | None = None,
+        allow_fallback: bool = True,
     ) -> NotificationProcessingResult | None:
         self.last_skip_reason = None
-        self.timings = {}
         if isinstance(user_id, NotificationRequest):
             request = user_id
             user_id = request.user_id
@@ -352,11 +412,38 @@ class NotificationService:
 
         flow_context = self._build_flow_context(user_id, flow)
         if flow_context is None:
+            if allow_fallback:
+                profile = self._get_user_profile(user_id, require_video_language=flow == "performance")
+                user_name = profile["user_name"] if profile else f"User {user_id}"
+                self.last_skip_reason = self.last_skip_reason or MISSING_REQUIRED_DATA
+                notification_data = self._fallback_notification(
+                    flow,
+                    user_name,
+                    {
+                        "performance": "your current growth area",
+                        "engagement": "your CLAN participation",
+                        "sentiment": "your recent responses and workplace reflections",
+                    }[flow],
+                )
+                response = self._make_result(
+                    user_id=user_id,
+                    notification_type=notification_type,
+                    title=notification_data["title"],
+                    description=notification_data["description"],
+                    reference_id=0,
+                    video_popup=None,
+                    flow=flow,
+                    should_send=should_send,
+                    reason=self.last_skip_reason,
+                )
+                response.reason = self.last_skip_reason
+                return response
             return None
         user_name, payload = flow_context
         if flow == "sentiment" and not payload["history_records"]:
-            self.last_skip_reason = NO_QA_DATA
-            return None
+            if not allow_fallback:
+                return None
+            self.last_skip_reason = None
         try:
             notification_data = self._generate_llm_notification(flow, user_name, payload)
         except Exception:
@@ -399,12 +486,14 @@ class NotificationService:
             image=notification.image,
             flow=flow,
             should_send=should_send,
+            reason=self.last_skip_reason,
         )
 
         if should_send:
             if not self.sender.remote_url:
                 response.remote_send_status = "skipped"
                 response.error = "REMOTE_NOTIFICATION_SEND_URL is not configured"
+                response.reason = response.reason or "REMOTE_NOTIFICATION_SEND_URL is not configured"
             else:
                 try:
                     remote_response = self.sender.send(
@@ -418,7 +507,7 @@ class NotificationService:
                     )
                     response.remote_send_status = "sent"
                     response.remote_send_response = remote_response
-                    if flow == "sentiment":
+                    if flow == "sentiment" and payload.get("history_records"):
                         save_sentiment_notification_history(
                             payload["history_records"],
                             self.db_engine,
@@ -431,6 +520,7 @@ class NotificationService:
                     )
                     response.remote_send_status = "failed"
                     response.error = str(exc)
+                    response.reason = response.reason or str(exc)
 
         return response
 
@@ -440,10 +530,9 @@ class NotificationService:
         *,
         flow: str | None = None,
         should_send: bool | None = None,
+        allow_fallback: bool = True,
     ) -> NotificationProcessingResult | None:
         self.last_skip_reason = None
-        self.timings = {}
-        started_at = time.perf_counter()
         if isinstance(user_id, NotificationRequest):
             request = user_id
             user_id = request.user_id
@@ -470,15 +559,40 @@ class NotificationService:
 
         flow_context = self._build_flow_context(user_id, flow)
         if flow_context is None:
+            if allow_fallback:
+                profile = self._get_user_profile(user_id, require_video_language=flow == "performance")
+                user_name = profile["user_name"] if profile else f"User {user_id}"
+                self.last_skip_reason = self.last_skip_reason or MISSING_REQUIRED_DATA
+                notification_data = self._fallback_notification(
+                    flow,
+                    user_name,
+                    {
+                        "performance": "your current growth area",
+                        "engagement": "your CLAN participation",
+                        "sentiment": "your recent responses and workplace reflections",
+                    }[flow],
+                )
+                response = self._make_result(
+                    user_id=user_id,
+                    notification_type=notification_type,
+                    title=notification_data["title"],
+                    description=notification_data["description"],
+                    reference_id=0,
+                    video_popup=None,
+                    flow=flow,
+                    should_send=should_send,
+                    reason=self.last_skip_reason,
+                )
+                response.reason = self.last_skip_reason
+                return response
             return None
         user_name, payload = flow_context
         if flow == "sentiment" and not payload["history_records"]:
-            self.last_skip_reason = NO_QA_DATA
-            return None
+            if not allow_fallback:
+                return None
+            self.last_skip_reason = None
         try:
-            llm_started_at = time.perf_counter()
             notification_data = await self._generate_llm_notification_async(flow, user_name, payload)
-            self.timings["LLM"] = time.perf_counter() - llm_started_at
         except Exception:
             self.last_skip_reason = LLM_NO_RESPONSE
             logger.exception("LLM returned no usable notification for user=%s flow=%s", user_id, flow)
@@ -519,15 +633,16 @@ class NotificationService:
             image=notification.image,
             flow=flow,
             should_send=should_send,
+            reason=self.last_skip_reason,
         )
 
         if should_send:
             if not self.sender.remote_url:
                 response.remote_send_status = "skipped"
                 response.error = "REMOTE_NOTIFICATION_SEND_URL is not configured"
+                response.reason = response.reason or "REMOTE_NOTIFICATION_SEND_URL is not configured"
             else:
                 try:
-                    api_started_at = time.perf_counter()
                     remote_response = await self.sender.send_async(
                         user_id=notification.user_id,
                         notification_type=notification.notification_type,
@@ -537,10 +652,9 @@ class NotificationService:
                         video_popup=notification.video_popup,
                         image=notification.image,
                     )
-                    self.timings["Remote API"] = time.perf_counter() - api_started_at
                     response.remote_send_status = "sent"
                     response.remote_send_response = remote_response
-                    if flow == "sentiment":
+                    if flow == "sentiment" and payload.get("history_records"):
                         save_sentiment_notification_history(
                             payload["history_records"],
                             self.db_engine,
@@ -553,8 +667,8 @@ class NotificationService:
                     )
                     response.remote_send_status = "failed"
                     response.error = str(exc)
+                    response.reason = response.reason or str(exc)
 
-        self.timings["Total"] = time.perf_counter() - started_at
         return response
 
 
