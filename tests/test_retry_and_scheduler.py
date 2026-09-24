@@ -602,7 +602,6 @@ def test_scheduler_logs_progress_names_types_and_skip_reasons(monkeypatch, caplo
     assert "[JOB] Skipped     : 1" in output
     assert "[JOB] COMPLETED" in output
     assert "[JOB] Eligible users got the notification" not in output
-    assert "Campaign day" not in output
 
 
 def test_scheduler_test_mode_bypasses_only_duplicate_check(monkeypatch, caplog):

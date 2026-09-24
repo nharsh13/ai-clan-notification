@@ -65,9 +65,10 @@ def send_notification(request: NotificationSendRequest):
         result = service.build_notification(request.user_id)
         logger.info("[NOTIFICATION] user_id=%s flow=%s", request.user_id, getattr(result, "flow", "unknown"))
         if result is None:
+            detail = service.last_error or f"Notification could not be generated for user_id={request.user_id}"
             raise HTTPException(
                 status_code=500,
-                detail=f"Notification could not be generated for user_id={request.user_id}",
+                detail=detail,
             )
         if result.remote_send_status == "failed":
             raise HTTPException(status_code=502, detail=result.error or "Remote notification send failed")

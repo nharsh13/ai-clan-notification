@@ -6,13 +6,8 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import bindparam, text
 
-from app.constants import NEXT_NOTIFICATION_BY_EVENT_TYPE, NOTIFICATION_CYCLE
+from app.constants import NEXT_NOTIFICATION_BY_EVENT_TYPE
 from app.database.connection import engine
-
-
-VALID_NOTIFICATION_EVENT_TYPES = {
-    value for value in NOTIFICATION_CYCLE.values() if value is not None
-}
 
 
 def get_user_notification_history(user_id: int, db_engine=engine) -> list[dict[str, Any]]:
@@ -37,25 +32,6 @@ def get_user_notification_history(user_id: int, db_engine=engine) -> list[dict[s
         rows = connection.execute(query, {"user_id": user_id}).mappings().all()
 
     return [dict(row) for row in rows]
-
-
-def determine_user_cycle_day(user_id: int, *, db_engine=engine, as_of_date: date | None = None) -> int:
-    history = get_user_notification_history(user_id, db_engine)
-    if not history:
-        return 1
-
-    valid_history = [
-        row for row in history
-        if row.get("event_type") in VALID_NOTIFICATION_EVENT_TYPES
-    ]
-    if not valid_history:
-        return 1
-
-    ist = ZoneInfo("Asia/Kolkata")
-    first_event_date = valid_history[0]["created_at"].astimezone(ist).date()
-    today = as_of_date or datetime.now(ist).date()
-    days_since_start = (today - first_event_date).days
-    return ((days_since_start % 7) + 1)
 
 
 def get_next_notification_for_user(user_id: int, *, db_engine=engine, as_of_date: date | None = None) -> str | None:

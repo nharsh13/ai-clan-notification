@@ -56,6 +56,7 @@ class NotificationService:
         self.db_engine = db_engine
         self.engine = NotificationEngine()
         self.last_skip_reason: str | None = None
+        self.last_error: str | None = None
 
     def _get_user_profile(
         self,
@@ -386,6 +387,7 @@ class NotificationService:
         allow_fallback: bool = True,
     ) -> NotificationProcessingResult | None:
         self.last_skip_reason = None
+        self.last_error = None
         if isinstance(user_id, NotificationRequest):
             request = user_id
             user_id = request.user_id
@@ -447,14 +449,15 @@ class NotificationService:
         logger.info("[NOTIFICATION] Step=LLM_GENERATION user_id=%s flow=%s", user_id, flow)
         try:
             notification_data = self._generate_llm_notification(flow, user_name, payload)
-        except Exception:
+        except Exception as exc:
             self.last_skip_reason = LLM_NO_RESPONSE
+            self.last_error = str(exc)
             logger.exception(
                 "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
                 user_id,
                 flow,
             )
-            raise
+            return None
         if (
             not isinstance(notification_data, dict)
             or not isinstance(notification_data.get("title"), str)
@@ -538,6 +541,7 @@ class NotificationService:
         allow_fallback: bool = True,
     ) -> NotificationProcessingResult | None:
         self.last_skip_reason = None
+        self.last_error = None
         if isinstance(user_id, NotificationRequest):
             request = user_id
             user_id = request.user_id
@@ -599,14 +603,15 @@ class NotificationService:
         logger.info("[NOTIFICATION] Step=LLM_GENERATION user_id=%s flow=%s", user_id, flow)
         try:
             notification_data = await self._generate_llm_notification_async(flow, user_name, payload)
-        except Exception:
+        except Exception as exc:
             self.last_skip_reason = LLM_NO_RESPONSE
+            self.last_error = str(exc)
             logger.exception(
                 "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
                 user_id,
                 flow,
             )
-            raise
+            return None
         if (
             not isinstance(notification_data, dict)
             or not isinstance(notification_data.get("title"), str)
