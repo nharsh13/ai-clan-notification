@@ -96,31 +96,20 @@ def _log_user_status(
     notification_type: str,
     status: str,
     http_status: int | None = None,
+    reason: str | None = None,
+    final: bool = False,
 ) -> None:
-    if status == "STARTED":
-        logger.info("")
-        logger.info("[%s/%s] USER %s | %s", position, total_users or position, user_id, user_name)
-        logger.info("")
-        logger.info("        TYPE   : %s", notification_type)
-        logger.info("        STATUS : STARTED")
+    # Results are emitted together after all concurrent tasks finish.
+    if not final:
         return
-
-    remote_label = "N/A" if http_status is None else http_status
-    if status == "SUCCESS":
-        remote_status = "SUCCESS"
+    prefix = f"[{position:03d}/{total_users}] User: {user_id} | {user_name or 'Unknown'} | {notification_type} | {status}"
+    if status == "SKIPPED":
+        logger.info("%s | Reason: %s", prefix, reason or "Unspecified")
     elif status == "FAILED":
-        remote_status = "FAILED"
-    elif status == "SKIPPED":
-        remote_status = "SKIPPED"
+        http = f"HTTP {http_status}" if http_status is not None else "HTTP unavailable"
+        logger.info("%s | %s | %s", prefix, http, reason or "Unknown error")
     else:
-        remote_status = "FAILED"
-    logger.info("")
-    logger.info("[%s/%s] USER %s | %s", position, total_users or position, user_id, user_name)
-    logger.info("")
-    logger.info("        TYPE   : %s", notification_type)
-    logger.info("        STATUS : %s", status)
-    logger.info("")
-    logger.info("[REMOTE] USER %s | HTTP %s | %s", user_id, remote_label, remote_status)
+        logger.info("%s | HTTP %s", prefix, http_status)
 
 
 def _collect_users() -> list[tuple[int, str]]:
@@ -342,9 +331,15 @@ async def _process_user_async(
 
 
 async def run_scheduler_async(test_mode: bool | None = None) -> dict:
+    started = datetime.now(SCHEDULER_TIMEZONE)
     test_mode = bool(test_mode) if test_mode is not None else os.getenv("SCHEDULER_TEST_MODE", "").strip().lower() == "true"
     users = _collect_users()
     total_users = len(users)
+    logger.info("============================================================")
+    logger.info("              AI-CLAN NOTIFICATION JOB")
+    logger.info("============================================================")
+    logger.info("Started : %s", started.strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("Total Users : %d", total_users)
     successful_count = 0
     failed_count = 0
     skipped_count = 0
@@ -372,6 +367,20 @@ async def run_scheduler_async(test_mode: bool | None = None) -> dict:
         item_kwargs["position"] = position
         tasks.append(asyncio.create_task(_process_user_async(**item_kwargs)))
     results = await asyncio.gather(*tasks)
+    for position, result in enumerate(results, start=1):
+        if not isinstance(result, dict):
+            continue
+        _log_user_status(
+            position=position,
+            total_users=total_users,
+            user_id=result["user_id"],
+            user_name=result.get("user_name", "Unknown"),
+            notification_type=result.get("notification_type", "UNKNOWN"),
+            status=result.get("status", "failed").upper(),
+            http_status=result.get("http_status"),
+            reason=result.get("reason"),
+            final=True,
+        )
     details = []
     for result in results:
         if not isinstance(result, dict):
@@ -389,6 +398,7 @@ async def run_scheduler_async(test_mode: bool | None = None) -> dict:
         "failed_count": failed_count,
         "skipped_count": skipped_count,
         "details": details,
+        "duration_seconds": (datetime.now(SCHEDULER_TIMEZONE) - started).total_seconds(),
     }
 
 
@@ -398,16 +408,6 @@ def main() -> None:
     cron_hour = os.getenv("CRON_HOUR", "00")
     cron_minute = os.getenv("CRON_MINUTE", "00")
 
-    logger.info("[SCHEDULER] Scheduler status: STARTED")
-    logger.info("[SCHEDULER] Current date/time in IST: %s", started_at.strftime("%Y-%m-%d %H:%M:%S"))
-    logger.info("[SCHEDULER] Configured schedule: cron[hour='%s', minute='%s']", cron_hour, cron_minute)
-    logger.info("[SCHEDULER] Status: RUNNING")
-    logger.info("")
-    logger.info("[JOB] Notification job started")
-    if test_mode:
-        logger.info("[JOB] TEST MODE: ENABLED")
-    logger.info("")
-
     try:
         with engine.connect() as lock_connection:
             acquired = lock_connection.execute(
@@ -415,14 +415,17 @@ def main() -> None:
                 {"lock_key": SCHEDULER_LOCK_KEY},
             ).scalar()
             if not acquired:
-                logger.info("[JOB] SUMMARY")
-                logger.info("[JOB] Total Users : 0")
-                logger.info("[JOB] Successful  : 0")
-                logger.info("[JOB] Failed      : 0")
-                logger.info("[JOB] Skipped     : 1")
-                logger.info("")
-                logger.info("[JOB] ALL NOTIFICATIONS SENT")
-                logger.info("[JOB] COMPLETED")
+                logger.info("============================================================")
+                logger.info("                       JOB SUMMARY")
+                logger.info("============================================================")
+                logger.info("Total Users : 0")
+                logger.info("Successful  : 0")
+                logger.info("Failed      : 0")
+                logger.info("Skipped     : 1")
+                logger.info("Duration    : 0s")
+                logger.info("============================================================")
+                logger.info("              AI-CLAN JOB COMPLETED")
+                logger.info("============================================================")
                 return
 
             try:
@@ -433,15 +436,17 @@ def main() -> None:
                 failed_count = summary["failed_count"]
                 skipped_count = summary["skipped_count"]
 
-                logger.info("")
-                logger.info("[JOB] SUMMARY")
-                logger.info("[JOB] Total Users : %d", total_users)
-                logger.info("[JOB] Successful  : %d", successful_count)
-                logger.info("[JOB] Failed      : %d", failed_count)
-                logger.info("[JOB] Skipped     : %d", skipped_count)
-                logger.info("")
-                logger.info("[JOB] ALL NOTIFICATIONS SENT")
-                logger.info("[JOB] COMPLETED")
+                logger.info("============================================================")
+                logger.info("                       JOB SUMMARY")
+                logger.info("============================================================")
+                logger.info("Total Users : %d", total_users)
+                logger.info("Successful  : %d", successful_count)
+                logger.info("Failed      : %d", failed_count)
+                logger.info("Skipped     : %d", skipped_count)
+                logger.info("Duration    : %.2fs", summary.get("duration_seconds", 0))
+                logger.info("============================================================")
+                logger.info("              AI-CLAN JOB COMPLETED")
+                logger.info("============================================================")
             finally:
                 lock_connection.execute(
                     text("SELECT pg_advisory_unlock(:lock_key)"),
