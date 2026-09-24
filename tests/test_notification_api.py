@@ -85,6 +85,19 @@ def test_performance_send_returns_gateway_error_on_remote_failure(monkeypatch):
     assert response.json()["detail"] == "Remote API error 503"
 
 
+def test_send_exposes_llm_exception_details(monkeypatch):
+    def raise_llm_error(*args, **kwargs):
+        raise RuntimeError("OpenAI quota exhausted: credit_balance_exhausted")
+
+    monkeypatch.setattr(service, "_generate_llm_notification", raise_llm_error)
+    monkeypatch.setattr(service, "_build_flow_context", lambda user_id, flow: ("veera", {"user_id": user_id, "language": "en", "prepared_qa": {"user_id": user_id, "questions": []}, "history_records": [], "context": "test"}))
+
+    response = client.post("/notification/send", json={"user_id": 953})
+
+    assert response.status_code == 500
+    assert "OpenAI quota exhausted: credit_balance_exhausted" in response.json()["detail"]
+
+
 def test_send_follows_notification_cycle(monkeypatch):
     event_types = iter([
         "VIDEO_RECOMMENDATION",

@@ -444,12 +444,17 @@ class NotificationService:
             if not allow_fallback:
                 return None
             self.last_skip_reason = None
+        logger.info("[NOTIFICATION] Step=LLM_GENERATION user_id=%s flow=%s", user_id, flow)
         try:
             notification_data = self._generate_llm_notification(flow, user_name, payload)
         except Exception:
             self.last_skip_reason = LLM_NO_RESPONSE
-            logger.exception("LLM returned no usable notification for user=%s flow=%s", user_id, flow)
-            return None
+            logger.exception(
+                "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
+                user_id,
+                flow,
+            )
+            raise
         if (
             not isinstance(notification_data, dict)
             or not isinstance(notification_data.get("title"), str)
@@ -591,12 +596,17 @@ class NotificationService:
             if not allow_fallback:
                 return None
             self.last_skip_reason = None
+        logger.info("[NOTIFICATION] Step=LLM_GENERATION user_id=%s flow=%s", user_id, flow)
         try:
             notification_data = await self._generate_llm_notification_async(flow, user_name, payload)
         except Exception:
             self.last_skip_reason = LLM_NO_RESPONSE
-            logger.exception("LLM returned no usable notification for user=%s flow=%s", user_id, flow)
-            return None
+            logger.exception(
+                "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
+                user_id,
+                flow,
+            )
+            raise
         if (
             not isinstance(notification_data, dict)
             or not isinstance(notification_data.get("title"), str)

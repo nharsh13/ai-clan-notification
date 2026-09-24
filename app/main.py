@@ -54,14 +54,20 @@ def get_engagement(user_id: int = Query(gt=0)):
 def get_sentiment(user_id: int = Query(gt=0)):
     return service.get_sentiment(user_id)
 
+logger = logging.getLogger(__name__)
+
+
 @app.post("/notification/send")
 def send_notification(request: NotificationSendRequest):
+    logger.info("[NOTIFICATION] Request started user_id=%s", request.user_id)
     try:
+        logger.info("[NOTIFICATION] Step=SELECT_FLOW user_id=%s", request.user_id)
         result = service.build_notification(request.user_id)
+        logger.info("[NOTIFICATION] user_id=%s flow=%s", request.user_id, getattr(result, "flow", "unknown"))
         if result is None:
             raise HTTPException(
                 status_code=500,
-                detail="Notification could not be generated",
+                detail=f"Notification could not be generated for user_id={request.user_id}",
             )
         if result.remote_send_status == "failed":
             raise HTTPException(status_code=502, detail=result.error or "Remote notification send failed")
@@ -86,6 +92,8 @@ def send_notification(request: NotificationSendRequest):
     except HTTPException:
         raise
     except ValueError as exc:
+        logger.exception("[NOTIFICATION] ERROR: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("[NOTIFICATION] ERROR: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
