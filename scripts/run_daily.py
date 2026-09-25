@@ -115,7 +115,7 @@ def _log_user_status(
     notification_type = notification_type or "UNKNOWN"
     if reason:
         reason = " ".join(str(reason).split())
-    prefix = f"{user_id} | {name:<25} | {notification_type:<22} | {status:<7}"
+    prefix = f"{user_id} | {name:<30} | {notification_type:<22} | {status:<7}"
     if status == "SUCCESS":
         logger.info("%s", prefix)
     elif status == "FAILED":
