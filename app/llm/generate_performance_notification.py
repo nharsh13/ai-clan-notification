@@ -15,7 +15,11 @@ def build_performance_notification_prompt(
 ) -> str:
     """Build a short personalized AI-CLAN video recommendation prompt."""
 
-    kii_name = weakest_kii.get("kii_name", "performance area")
+    kii_name = weakest_kii.get(
+        "kii_name",
+        "performance area",
+    )
+
     video_title = video.get("title") or "learning video"
 
     return f"""
@@ -26,31 +30,81 @@ Language: {language}
 Area to improve: {kii_name}
 Video: {video_title}
 
-Rules:
-- Write directly in the requested language.
-- Use simple, friendly, everyday language.
-- Keep the notification short, positive, and motivating.
-- Title MUST start with "Hello {user_name}".
-- Keep the title short.
-- Ensure the title and description are grammatically correct and natural in the requested language.
-- Do NOT include the KII name or video title in the title.
-- Mention the improvement area in the description.
-- Encourage the user to watch the selected video.
-- Do NOT mention performance percentages.
-- Do NOT mention monthly, daily, or seven-day targets.
-- Do NOT use difficult, formal, or technical language.
-- Do NOT make negative or discouraging statements.
-- Do NOT invent information about the video or its benefits.
-- Mention only the provided improvement area.
-- Return exactly two fields: "title" and "description".
-- Return ONLY valid JSON.
-- Do not return Markdown, explanations, or additional fields.
+LANGUAGE:
+- Use VERY SIMPLE, everyday language.
+- Use common words and short sentences.
+- Write naturally in the requested language.
+- Be polite, warm, friendly, and respectful.
+- Write for users who may understand only basic English or basic local-language words.
+- Avoid difficult, formal, technical, professional, or complicated words.
+- If a simpler word is possible, always use it.
+- Do not use complicated motivational phrases.
+- Do not use "please".
+- Do not use emojis.
 
-Example:
+TITLE:
+- Must start with "Hello {user_name}".
+- Keep it short: 3–6 words.
+- Make it positive and friendly.
+- Do NOT include the improvement area "{kii_name}".
+- Do NOT include the video title "{video_title}".
+- Use simple everyday words.
+
+DESCRIPTION:
+- Keep it short: about 15–25 words.
+- Use 2 short sentences.
+- Mention ONLY the provided improvement area: {kii_name}.
+- Encourage the user to watch the video.
+- The notification opens the video when clicked, so it is okay to directly say "Watch this video".
+- Keep the message positive and respectful.
+- Clearly tell the user what to do.
+- Do not make the user feel bad or guilty.
+
+IMPORTANT VIDEO RULE:
+- The user can click the notification and watch the selected video.
+- Encourage the user to watch the video.
+- Do NOT invent what the video teaches.
+- Do NOT invent benefits of the video.
+- Do NOT make claims about the video that are not provided.
+- Do NOT include information that is not provided.
+
+DO NOT:
+- Mention performance percentages.
+- Mention monthly targets.
+- Mention daily targets.
+- Mention seven-day targets.
+- Mention question counts.
+- Mention information that is not provided.
+- Use difficult or formal language.
+- Use technical or professional language.
+- Use business jargon.
+- Use negative or discouraging language.
+- Shame, blame, or criticize the user.
+- Use words such as "bad", "poor", "lazy", "weak", "failure",
+  "lacking", "deficiency", or "underperforming".
+- Add emojis.
+
+FINAL CHECK:
+- Is the title 3–6 simple words?
+- Is the description about 15–25 words?
+- Is the description only 2 short sentences?
+- Is the improvement area mentioned?
+- Does the description encourage the user to watch the video?
+- Are all words simple and easy to understand?
+- Is the message polite and friendly?
+- Did I avoid making claims about the video?
+- Is there only ONE main idea?
+
+Return ONLY valid JSON with exactly these two fields:
+
 {{
-    "title": "Hello {user_name}, Let's Get Better",
-    "description": "{kii_name} is an area you can improve. Watch this video to learn and grow."
+    "title": "string",
+    "description": "string"
 }}
+
+No Markdown.
+No explanation.
+No additional fields.
 """.strip()
 
 
@@ -62,6 +116,20 @@ def validate_performance_notification(
     if not isinstance(notification, dict):
         raise ValueError(
             "Performance notification must be a JSON object."
+        )
+
+    # The prompt requires exactly two fields.
+    allowed_fields = {
+        "title",
+        "description",
+    }
+
+    extra_fields = set(notification.keys()) - allowed_fields
+
+    if extra_fields:
+        raise ValueError(
+            "Performance notification contains unexpected fields: "
+            f"{sorted(extra_fields)}"
         )
 
     title = notification.get("title")
@@ -77,11 +145,15 @@ def validate_performance_notification(
             "Performance notification description must be a non-empty string."
         )
 
-    action = notification.get("action", "Watch now")
-
-    if not isinstance(action, str) or not action.strip():
+    # Keep the notification suitable for mobile.
+    if len(title.strip()) > 100:
         raise ValueError(
-            "Performance notification action must be a non-empty string."
+            "Performance notification title is too long."
+        )
+
+    if len(description.strip()) > 300:
+        raise ValueError(
+            "Performance notification description is too long."
         )
 
 
@@ -108,9 +180,26 @@ def generate_performance_notification(
         prompt,
     )
 
-    notification = _parse_json_response(
-        response.output_text.strip()
-    )
+    if not response:
+        raise ValueError(
+            "Performance notification generation returned no response."
+        )
+
+    content = getattr(response, "output_text", None)
+
+    if not content:
+        raise ValueError(
+            "Performance notification generation returned no text."
+        )
+
+    content = content.strip()
+
+    if not content:
+        raise ValueError(
+            "Performance notification generation returned empty text."
+        )
+
+    notification = _parse_json_response(content)
 
     validate_performance_notification(notification)
 

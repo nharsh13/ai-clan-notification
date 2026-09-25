@@ -42,6 +42,20 @@ LLM_NO_RESPONSE = "LLM_NO_RESPONSE"
 MISSING_REQUIRED_DATA = "MISSING_REQUIRED_DATA"
 
 
+def _selected_question_without_answers(prepared_qa: dict[str, Any]) -> str | None:
+    questions = prepared_qa.get("questions") or []
+    if not questions:
+        return None
+    selected = questions[0]
+    responses = selected.get("responses") or []
+    if any(response.get("answer") is not None for response in responses):
+        return None
+    return next(
+        (response.get("question") for response in responses if response.get("question")),
+        None,
+    )
+
+
 class NotificationService:
     """Coordinate the AI-CLAN notification pipeline."""
 
@@ -191,11 +205,19 @@ class NotificationService:
             )
         elif flow == "sentiment":
             if payload.get("prepared_qa"):
-                prompt = build_qa_sentiment_notification_prompt(
-                    user_name=user_name,
-                    language=payload.get("language", "English"),
-                    prepared_qa=payload["prepared_qa"],
-                )
+                question = _selected_question_without_answers(payload["prepared_qa"])
+                if question is not None:
+                    prompt = build_no_qa_sentiment_notification_prompt(
+                        user_name=user_name,
+                        language=payload.get("language", "English"),
+                        question=question,
+                    )
+                else:
+                    prompt = build_qa_sentiment_notification_prompt(
+                        user_name=user_name,
+                        language=payload.get("language", "English"),
+                        prepared_qa=payload["prepared_qa"],
+                    )
             else:
                 prompt = build_no_qa_sentiment_notification_prompt(
                     user_name=user_name,
@@ -228,11 +250,19 @@ class NotificationService:
             )
         elif flow == "sentiment":
             if payload.get("prepared_qa"):
-                prompt = build_qa_sentiment_notification_prompt(
-                    user_name=user_name,
-                    language=payload.get("language", "English"),
-                    prepared_qa=payload["prepared_qa"],
-                )
+                question = _selected_question_without_answers(payload["prepared_qa"])
+                if question is not None:
+                    prompt = build_no_qa_sentiment_notification_prompt(
+                        user_name=user_name,
+                        language=payload.get("language", "English"),
+                        question=question,
+                    )
+                else:
+                    prompt = build_qa_sentiment_notification_prompt(
+                        user_name=user_name,
+                        language=payload.get("language", "English"),
+                        prepared_qa=payload["prepared_qa"],
+                    )
             else:
                 prompt = build_no_qa_sentiment_notification_prompt(
                     user_name=user_name,
@@ -364,18 +394,29 @@ class NotificationService:
     def get_sentiment(self, user_id: int) -> dict[str, Any]:
         eligible_responses = get_eligible_user_qa(user_id, self.db_engine)
         if not eligible_responses:
-            return {"user_id": user_id, "responses": []}
+            return {
+                "user_id": user_id,
+                "notification_type": "SENTIMENT_QA",
+                "next_question": None,
+                "selection_status": None,
+            }
 
-        selected_response = eligible_responses[0]
+        question_id = eligible_responses[0]["question_id"]
+        selected_rows = [row for row in eligible_responses if row["question_id"] == question_id]
+        answers = [{
+            "answer_id": row.get("answer_id"),
+            "answer": row.get("answer"),
+        } for row in selected_rows if row.get("answer_id") is not None]
 
         return {
             "user_id": user_id,
-            "responses": [{
-                "question_id": selected_response["question_id"],
-                "question": selected_response["question"],
-                "answer_id": selected_response["answer_id"],
-                "answer": selected_response["answer"],
-            }],
+            "notification_type": "SENTIMENT_QA",
+            "next_question": {
+                "question_id": question_id,
+                "question": selected_rows[0]["question"],
+                "answers": answers,
+            },
+            "selection_status": selected_rows[0].get("selection_status", "UNUSED"),
         }
 
     def build_notification(

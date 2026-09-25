@@ -42,20 +42,16 @@ class _HistoryEngine:
         return self.connection
 
 
-def test_eligible_qa_history_check_uses_exact_response_answer_identity():
+def test_eligible_qa_history_check_uses_question_tracking_for_cycle():
     engine = _HistoryEngine([])
 
     sent.get_eligible_user_qa(953, cast(Engine, engine))
 
     query = engine.connection.query
-    assert "h.user_id = response.user_id" in query
-    assert "h.response_id = response.response_id" in query
-    assert "h.question_id = response.question_id" in query
-    assert "h.answer_id = response.answer_id" in query
+    assert "FROM public.sentiment_notification_history h" in query
+    assert "h.user_id = :user_id" in query
     assert "h.status = 1" in query
-    assert "FROM unused_responses" in query
-    assert "FROM all_responses" in query
-    assert "WHERE NOT EXISTS (SELECT 1 FROM unused_responses)" in query
+    assert "SELECT DISTINCT h.question_id" in query
     assert "DELETE FROM public.sentiment_notification_history" not in query
     assert "UPDATE public.sentiment_notification_history" not in query
     assert engine.connection.params == {"user_id": 953}
@@ -100,6 +96,41 @@ def test_history_save_writes_all_identity_fields_with_status_one():
         "response_id": 11,
         "question_id": 1,
         "answer_id": 3,
+    }]
+    assert "status" in engine.connection.query
+    assert ", 1" in engine.connection.query
+
+
+def test_history_save_records_no_answer_question_with_null_response_and_answer_ids():
+    class WriteConnection:
+        def execute(self, query, params):
+            self.query = str(query)
+            self.params = params
+
+    class WriteEngine:
+        def __init__(self):
+            self.connection = WriteConnection()
+
+        def begin(self):
+            return self
+
+        def __enter__(self):
+            return self.connection
+
+        def __exit__(self, *args):
+            return False
+
+    engine = WriteEngine()
+    sent.save_sentiment_notification_history(
+        [{"user_id": 953, "question_id": 92, "response_id": None, "answer_id": None}],
+        cast(Engine, engine),
+    )
+
+    assert engine.connection.params == [{
+        "user_id": 953,
+        "response_id": None,
+        "question_id": 92,
+        "answer_id": None,
     }]
     assert "status" in engine.connection.query
     assert ", 1" in engine.connection.query
@@ -422,3 +453,186 @@ def test_engagement_and_qa_sentiment_are_independent():
     # Q/A sentiment still has its own Q&A data.
     assert qa_sentiment_input["question"]
     assert qa_sentiment_input["selected_answer"]
+
+
+class _QuestionSelectionEngine:
+    def __init__(self, rows, used_question_ids=None):
+        self.rows = rows
+        self.used_question_ids = set(used_question_ids or [])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def connect(self):
+        return self
+
+    def execute(self, query, params=None):
+        query_text = str(query)
+        if "FROM all_questions" in query_text:
+            return _HistoryResult([
+                {"question_id": 1, "question": "How do you handle feedback?", "first_created_at": "2024-01-01T00:00:00+00:00", "first_response_id": 11},
+                {"question_id": 2, "question": "How do you adapt to change?", "first_created_at": "2024-01-02T00:00:00+00:00", "first_response_id": 13},
+            ])
+        if "FROM public.sentiment_notification_history h" in query_text:
+            used = [{"question_id": question_id} for question_id in sorted(self.used_question_ids)]
+            return _HistoryResult(used)
+        if "WHERE r.user_id = :user_id\n          AND r.question_id = :question_id" in query_text:
+            question_id = params["question_id"]
+            return _HistoryResult([row for row in self.rows if row["question_id"] == question_id])
+        return _HistoryResult(self.rows)
+
+
+def test_get_eligible_user_qa_selects_one_question_with_all_answers():
+    """Each notification should use only one question and all its answers."""
+    rows = [
+        {
+            "response_id": 11,
+            "user_id": 953,
+            "question_id": 1,
+            "question": "How do you handle feedback?",
+            "answer_id": 3,
+            "answer": "I listen carefully.",
+        },
+        {
+            "response_id": 12,
+            "user_id": 953,
+            "question_id": 1,
+            "question": "How do you handle feedback?",
+            "answer_id": 4,
+            "answer": "I ask clarifying questions.",
+        },
+        {
+            "response_id": 13,
+            "user_id": 953,
+            "question_id": 2,
+            "question": "How do you adapt to change?",
+            "answer_id": 5,
+            "answer": "I prefer a clear plan.",
+        },
+    ]
+
+    result = sent.get_eligible_user_qa(953, cast(Engine, _QuestionSelectionEngine(rows)))
+
+    assert {row["question_id"] for row in result} == {1}
+    assert len(result) == 2
+    assert [row["answer_id"] for row in result] == [3, 4]
+
+
+def test_select_next_question_for_cycle_skips_used_questions_until_reset():
+    candidates = [
+        {"question_id": 1, "question": "Q1", "first_created_at": "2024-01-01T00:00:00+00:00", "first_response_id": 10},
+        {"question_id": 2, "question": "Q2", "first_created_at": "2024-01-02T00:00:00+00:00", "first_response_id": 20},
+        {"question_id": 3, "question": "Q3", "first_created_at": "2024-01-03T00:00:00+00:00", "first_response_id": 30},
+    ]
+
+    assert sent._select_next_question_for_cycle(candidates, {1})["question_id"] == 2
+    assert sent._select_next_question_for_cycle(candidates, {1, 2, 3})["question_id"] == 1
+
+
+def test_prepare_user_qa_handles_question_without_answers():
+    """A question without answers should still be carried forward as a single question payload."""
+    prepared = sent.prepare_user_qa(
+        953,
+        rows=[{
+            "question_id": 99,
+            "question": "What is your biggest work challenge?",
+            "answer_id": None,
+            "answer": None,
+        }],
+    )
+
+    assert prepared["user_id"] == 953
+    assert len(prepared["questions"]) == 1
+    assert prepared["questions"][0]["question_id"] == 99
+    assert prepared["questions"][0]["responses"][0]["answer"] is None
+
+
+def test_get_eligible_user_qa_handles_question_without_answers():
+    """An assigned question with no answer rows should still be selected as a single-question payload."""
+
+    class _NoAnswerEngine:
+        def connect(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query, params=None):
+            query_text = str(query)
+            if "FROM all_questions" in query_text:
+                return _HistoryResult([
+                    {"question_id": 99, "question": "What is your biggest work challenge?", "first_created_at": "2024-01-01T00:00:00+00:00", "first_response_id": None},
+                ])
+            if "FROM public.sentiment_notification_history h" in query_text:
+                return _HistoryResult([])
+            if "r.question_id = :question_id" in query_text:
+                return _HistoryResult([])
+            return _HistoryResult([])
+
+    result = sent.get_eligible_user_qa(953, cast(Engine, _NoAnswerEngine()))
+
+    assert result == [{
+        "user_id": 953,
+        "question_id": 99,
+        "question": "What is your biggest work challenge?",
+        "answer_id": None,
+        "answer": None,
+        "selection_status": "UNUSED",
+    }]
+
+
+def test_get_eligible_user_qa_skips_history_for_no_answer_question_and_resets_cycle():
+    class _CycleEngine:
+        def __init__(self, used_question_ids):
+            self.used_question_ids = set(used_question_ids)
+
+        def connect(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, query, params=None):
+            query_text = str(query)
+            if "FROM all_questions" in query_text:
+                return _HistoryResult([
+                    {"question_id": 92, "question": "Question 92", "first_created_at": "2024-01-01T00:00:00+00:00", "first_response_id": None},
+                    {"question_id": 93, "question": "Question 93", "first_created_at": "2024-01-02T00:00:00+00:00", "first_response_id": None},
+                ])
+            if "FROM public.sentiment_notification_history h" in query_text:
+                return _HistoryResult([{"question_id": value} for value in self.used_question_ids])
+            if "r.question_id = :question_id" in query_text:
+                return _HistoryResult([])
+            return _HistoryResult([])
+
+    next_question = sent.get_eligible_user_qa(
+        953,
+        cast(Engine, _CycleEngine({92})),
+    )
+    assert next_question[0]["question_id"] == 93
+
+    reset_question = sent.get_eligible_user_qa(
+        953,
+        cast(Engine, _CycleEngine({92, 93})),
+    )
+    assert reset_question[0]["question_id"] == 92
+    assert reset_question[0]["selection_status"] == "CYCLE_RESET"
+
+
+def test_select_next_question_for_cycle_is_independent_by_user():
+    candidates = [
+        {"question_id": 1, "question": "Q1", "first_created_at": "2024-01-01T00:00:00+00:00", "first_response_id": 10},
+        {"question_id": 2, "question": "Q2", "first_created_at": "2024-01-02T00:00:00+00:00", "first_response_id": 20},
+    ]
+
+    assert sent._select_next_question_for_cycle(candidates, {1})["question_id"] == 2
+    assert sent._select_next_question_for_cycle(candidates, {2})["question_id"] == 1

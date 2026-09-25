@@ -1,6 +1,26 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import text
 
 from app.database.connection import engine
+
+
+def _select_next_question_for_cycle(question_rows: list[dict], used_question_ids: set[int]) -> dict | None:
+    """Choose the next unused question, or reset to the oldest question when the cycle is exhausted."""
+    eligible = [row for row in question_rows if int(row["question_id"]) not in used_question_ids]
+    if not eligible:
+        eligible = list(question_rows)
+    if not eligible:
+        return None
+
+    def _sort_key(row: dict):
+        created_at = row.get("first_created_at")
+        if created_at is None:
+            created_at = datetime.min.replace(tzinfo=timezone.utc)
+        response_id = row.get("first_response_id") or 0
+        return (created_at, response_id, int(row["question_id"]))
+
+    return min(eligible, key=_sort_key)
 
 
 def get_user_answered_questions(user_id: int, db_engine=engine):
@@ -77,113 +97,131 @@ def prepare_user_qa(
 
 
 def get_eligible_user_qa(user_id: int, db_engine=engine) -> list[dict]:
-    """Return unused active Q&A, restarting from all active Q&A when exhausted."""
+    """Return the next unused question and all of its related answers for one notification."""
 
-    query = text("""
-        WITH all_responses AS (
+    question_query = text("""
+        WITH answered_questions AS (
             SELECT
-                r.id AS response_id,
-                r.user_id,
                 r.question_id,
                 q.question,
-                r.answer_id,
-                a.answer_text AS answer,
-                r.created_at
-            FROM public.user_persona_question_responces r
-            JOIN public.user_persona_question q
-                ON q.id = r.question_id
-            JOIN public.user_persona_question_answers a
-                ON a.id = r.answer_id
-               AND a.question_id = r.question_id
-            WHERE r.user_id = :user_id
-              AND r.status = 1
-        ), unused_responses AS (
-            SELECT response.*
-            FROM all_responses response
-            WHERE NOT EXISTS (
-                SELECT 1
-                FROM public.sentiment_notification_history h
-                WHERE h.user_id = response.user_id
-                  AND h.response_id = response.response_id
-                  AND h.question_id = response.question_id
-                  AND h.answer_id = response.answer_id
-                  AND h.status = 1
-            )
-        )
-        SELECT response_id, user_id, question_id, question, answer_id, answer, selection_type
-        FROM (
-            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at, 'NEW' AS selection_type
-            FROM unused_responses
-            UNION ALL
-            SELECT response_id, user_id, question_id, question, answer_id, answer, created_at, 'REUSED' AS selection_type
-            FROM all_responses
-            WHERE NOT EXISTS (SELECT 1 FROM unused_responses)
-        ) selected_responses
-        ORDER BY created_at, response_id
-    """)
-
-    with db_engine.connect() as connection:
-        return [dict(row) for row in connection.execute(query, {"user_id": user_id}).mappings()]
-
-
-def get_next_sentiment_response(user_id: int, db_engine=engine) -> dict | None:
-    query = text("""
-        WITH selected_question AS (
-            SELECT
-                r.question_id,
                 MIN(r.created_at) AS first_created_at,
                 MIN(r.id) AS first_response_id
             FROM public.user_persona_question_responces r
+            JOIN public.user_persona_question q
+                ON q.id = r.question_id
             WHERE r.user_id = :user_id
               AND r.status = 1
+            GROUP BY r.question_id, q.question
+        ), assigned_without_answers AS (
+            SELECT
+                a.question_id,
+                q.question,
+                MIN(a.created_at) AS first_created_at,
+                NULL::bigint AS first_response_id
+            FROM public.user_persona_question_assignment a
+            JOIN public.user_persona_question q
+                ON q.id = a.question_id
+            WHERE a.user_id = :user_id
+              AND a.status = 1
               AND NOT EXISTS (
                   SELECT 1
-                  FROM public.sentiment_notification_history h
-                  WHERE h.user_id = r.user_id
-                    AND h.question_id = r.question_id
-                    AND h.status = 1
+                  FROM public.user_persona_question_responces r
+                  WHERE r.user_id = a.user_id
+                    AND r.question_id = a.question_id
+                    AND r.status = 1
               )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM public.sentiment_notification_history h
-                  WHERE h.user_id = :user_id
-                    AND h.status = 1
-                    AND h.created_at::date = CURRENT_DATE
-              )
-            GROUP BY r.question_id
-            ORDER BY first_created_at, first_response_id
-            LIMIT 1
+            GROUP BY a.question_id, q.question
+        ), all_questions AS (
+            SELECT * FROM answered_questions
+            UNION ALL
+            SELECT * FROM assigned_without_answers
         )
+        SELECT question_id, question, first_created_at, first_response_id
+        FROM all_questions
+        ORDER BY first_created_at, first_response_id, question_id
+    """)
+
+    used_question_query = text("""
+        SELECT DISTINCT h.question_id
+        FROM public.sentiment_notification_history h
+        WHERE h.user_id = :user_id
+          AND h.status = 1
+    """)
+
+    with db_engine.connect() as connection:
+        candidate_rows = [dict(row) for row in connection.execute(question_query, {"user_id": user_id}).mappings()]
+        used_question_ids = {
+            int(row["question_id"])
+            for row in connection.execute(used_question_query, {"user_id": user_id}).mappings()
+        }
+
+    selected_question = _select_next_question_for_cycle(candidate_rows, used_question_ids)
+    if selected_question is None:
+        return []
+
+    candidate_ids = {int(row["question_id"]) for row in candidate_rows}
+    selection_status = (
+        "CYCLE_RESET"
+        if candidate_ids and candidate_ids.issubset(used_question_ids)
+        else "UNUSED"
+    )
+
+    selected_question_id = int(selected_question["question_id"])
+    responses_query = text("""
         SELECT
             r.id AS response_id,
             r.user_id,
             r.question_id,
-            q.question AS question,
+            q.question,
             r.answer_id,
             a.answer_text AS answer,
             r.created_at
         FROM public.user_persona_question_responces r
-        JOIN selected_question selected
-            ON selected.question_id = r.question_id
         JOIN public.user_persona_question q
             ON q.id = r.question_id
         JOIN public.user_persona_question_answers a
             ON a.id = r.answer_id
            AND a.question_id = r.question_id
         WHERE r.user_id = :user_id
+          AND r.question_id = :question_id
           AND r.status = 1
         ORDER BY r.created_at, r.id
     """)
 
     with db_engine.connect() as connection:
-        rows = connection.execute(query, {"user_id": user_id}).mappings().all()
+        response_rows = [dict(row) for row in connection.execute(responses_query, {"user_id": user_id, "question_id": selected_question_id}).mappings()]
 
+    if not response_rows:
+        return [{
+            "user_id": user_id,
+            "question_id": selected_question_id,
+            "question": selected_question["question"],
+            "answer_id": None,
+            "answer": None,
+            "selection_status": selection_status,
+        }]
+
+    for row in response_rows:
+        row["selection_status"] = selection_status
+    return response_rows
+
+
+def get_next_sentiment_response(user_id: int, db_engine=engine) -> dict | None:
+    rows = get_eligible_user_qa(user_id, db_engine)
     if not rows:
         return None
 
-    responses = [dict(row) for row in rows]
-    selected = responses[0]
-    selected["responses"] = responses
+    question_id = rows[0]["question_id"]
+    selected = {
+        "user_id": user_id,
+        "question_id": question_id,
+        "question": rows[0]["question"],
+        "responses": rows,
+    }
+    for row in rows:
+        selected.setdefault("response_id", row.get("response_id"))
+        selected.setdefault("answer_id", row.get("answer_id"))
+        selected.setdefault("answer", row.get("answer"))
     return selected
 
 
@@ -202,15 +240,23 @@ def save_sentiment_notification_history(
     """)
 
     responses = response if isinstance(response, list) else [response]
+    valid_responses = [
+        item for item in responses
+        if item.get("user_id") is not None
+        and item.get("question_id") is not None
+    ]
+    if not valid_responses:
+        return
+
     with db_engine.begin() as connection:
         connection.execute(query, [
             {
                 "user_id": item["user_id"],
-                "response_id": item["response_id"],
+                "response_id": item.get("response_id"),
                 "question_id": item["question_id"],
-                "answer_id": item["answer_id"],
+                "answer_id": item.get("answer_id"),
             }
-            for item in responses
+            for item in valid_responses
         ])
 
 

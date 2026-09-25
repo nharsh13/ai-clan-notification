@@ -27,35 +27,79 @@ User: {user_name}
 Language: {language}
 Type: {notification_type}
 
-Rules:
-- Write directly in the requested language.
-- Use simple, friendly, everyday language.
-- Keep the title short, meaningful, and encouraging.
-- The title MUST include the user's name.
-- The title MUST NOT be only "Hello {user_name},".
-- Ensure the title and description are grammatically correct and natural in the requested language.
+LANGUAGE:
+- Use VERY SIMPLE, everyday language.
+- Use common words and short sentences.
+- Write naturally in the requested language.
+- Be polite, warm, friendly, and respectful.
+- Write for users who may understand only basic English or basic local-language words.
+- Avoid difficult, formal, technical, professional, or complicated words.
+- If a simpler word is possible, always use it.
+- Do not use complicated motivational phrases.
+- Do not use "please".
+- Do not use emojis.
 
-For IMPROVEMENT:
-- Encourage the user to participate more in CLAN.
-- Encourage the user to answer CLAN questions.
+TITLE:
+- Must include the user's name.
+- Keep it short: 3–6 words.
+- Make it positive and friendly.
+- Do NOT make it only "Hello {user_name}".
+- Use simple everyday words.
+
+DESCRIPTION:
+- Keep it medium-short: about 15–25 words.
+- Use 2 short sentences.
+- Keep it polite and natural.
+- Encourage the user to keep using CLAN regularly.
+- Encourage the user to share their thoughts or responses.
+- Make the message positive and supportive.
+
+IMPORTANT APP BEHAVIOUR:
+- Clicking the notification only opens the CLAN app.
+- Do NOT say or imply that the user can answer a question directly from the notification.
+- Do NOT tell the user to click the notification to answer a question.
+- Do NOT mention a specific question.
+- Do NOT describe or refer to an individual question.
+- The user can see and answer the daily question after opening CLAN.
+
+FOR IMPROVEMENT:
+- Encourage the user to use CLAN regularly.
+- Encourage the user to share their thoughts and responses.
 - Keep the message positive.
+- Do not make the user feel bad or guilty.
 
-For POSITIVE:
-- Appreciate the user's CLAN participation.
-- Encourage the user to continue participating.
+FOR POSITIVE:
+- Appreciate the user's participation in CLAN.
+- Encourage the user to continue using CLAN.
+- Encourage them to keep sharing their thoughts and responses.
 
-Do not:
+DO NOT:
 - Mention response percentage.
 - Mention question counts.
 - Mention individual questions.
+- Mention missing data.
+- Mention internal system details.
+- Mention debugging.
 - Shame, blame, or criticize the user.
-- Use words such as bad, poor, lazy, weak, or failure.
-- Use difficult, formal, technical, or complicated language.
+- Make the user feel guilty or pressured.
+- Use words such as "bad", "poor", "lazy", "weak", or "failure".
+- Use difficult or formal language.
+- Use technical or professional language.
 - Make unsupported claims.
+- Add information that is not provided.
 
-The description must be short, clear, and actionable.
+FINAL CHECK:
+- Is the title 3–6 simple words?
+- Is the description about 15–25 words?
+- Is the description only 2 short sentences?
+- Is the language easy to understand?
+- Is the message polite and friendly?
+- Does it avoid telling the user they can answer directly from the notification?
+- Does it avoid mentioning a specific question?
+- Is there only one main message?
 
 Return ONLY valid JSON with exactly these two fields:
+
 {{
     "title": "string",
     "description": "string"
@@ -95,7 +139,18 @@ def generate_engagement_sentiment_notification(
         prompt,
     )
 
-    content = response.output_text.strip()
+    if not response:
+        return None
+
+    content = getattr(response, "output_text", None)
+
+    if not content:
+        return None
+
+    content = content.strip()
+
+    if not content:
+        return None
 
     notification = _parse_json_response(content)
 
@@ -116,15 +171,42 @@ def validate_engagement_sentiment_notification(
             "Engagement sentiment notification must be a JSON object."
         )
 
+    # The prompt requires exactly two fields.
+    allowed_fields = {
+        "title",
+        "description",
+    }
+
+    extra_fields = set(notification.keys()) - allowed_fields
+
+    if extra_fields:
+        raise ValueError(
+            "Engagement sentiment notification contains unexpected fields: "
+            f"{sorted(extra_fields)}"
+        )
+
     title = notification.get("title")
     description = notification.get("description")
 
     if not isinstance(title, str) or not title.strip():
         raise ValueError(
-            "Engagement sentiment notification title must be a non-empty string."
+            "Engagement sentiment notification title "
+            "must be a non-empty string."
         )
 
     if not isinstance(description, str) or not description.strip():
         raise ValueError(
-            "Engagement sentiment notification description must be a non-empty string."
+            "Engagement sentiment notification description "
+            "must be a non-empty string."
+        )
+
+    # Keep the notification suitable for mobile.
+    if len(title.strip()) > 100:
+        raise ValueError(
+            "Engagement sentiment notification title is too long."
+        )
+
+    if len(description.strip()) > 300:
+        raise ValueError(
+            "Engagement sentiment notification description is too long."
         )
