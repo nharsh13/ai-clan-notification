@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import logging
 import os
 import sys
@@ -47,6 +46,22 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+def parse_test_mode(value: object | None) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return bool(value)
+
+
+def get_scheduler_test_mode() -> bool:
+    return parse_test_mode(os.getenv("SCHEDULER_TEST_MODE", "").strip())
+
+
 def configure_terminal_logging() -> None:
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
@@ -89,27 +104,25 @@ configure_terminal_logging()
 
 def _log_user_status(
     *,
-    position: int,
-    total_users: int,
     user_id: int,
     user_name: str,
     notification_type: str,
     status: str,
     http_status: int | None = None,
     reason: str | None = None,
-    final: bool = False,
 ) -> None:
-    # Results are emitted together after all concurrent tasks finish.
-    if not final:
-        return
-    prefix = f"[{position:03d}/{total_users}] User: {user_id} | {user_name or 'Unknown'} | {notification_type} | {status}"
-    if status == "SKIPPED":
-        logger.info("%s | Reason: %s", prefix, reason or "Unspecified")
+    name = user_name or "Unknown"
+    notification_type = notification_type or "UNKNOWN"
+    if reason:
+        reason = " ".join(str(reason).split())
+    prefix = f"{user_id} | {name:<25} | {notification_type:<22} | {status:<7}"
+    if status == "SUCCESS":
+        logger.info("%s", prefix)
     elif status == "FAILED":
         http = f"HTTP {http_status}" if http_status is not None else "HTTP unavailable"
         logger.info("%s | %s | %s", prefix, http, reason or "Unknown error")
-    else:
-        logger.info("%s | HTTP %s", prefix, http_status)
+    elif status == "SKIPPED":
+        logger.info("%s | %s", prefix, reason or "Unspecified")
 
 
 def _collect_users() -> list[tuple[int, str]]:
@@ -135,36 +148,22 @@ async def _process_user_async(
     user_id: int,
     user_name: str,
     *,
-    position: int,
-    total_users: int,
     test_mode: bool,
     semaphore: asyncio.Semaphore,
-    completion_counter: dict[str, int] | None = None,
-    completion_counter_lock: asyncio.Lock | None = None,
 ) -> dict:
-    async def _mark_completion() -> int:
-        if completion_counter is not None and completion_counter_lock is not None:
-            async with completion_counter_lock:
-                completion_counter["value"] += 1
-                return completion_counter["value"]
-        return position
-
     async with semaphore:
         try:
             event_type = get_next_notification_for_user(user_id, db_engine=engine)
             if event_type is None:
-                completion_index = await _mark_completion()
-                _log_user_status(position=position, total_users=total_users, user_id=user_id,
+                _log_user_status(user_id=user_id,
                                  user_name=user_name or "Unknown", notification_type="UNKNOWN",
-                                 status="SKIPPED")
+                                 status="SKIPPED", reason="NO_ELIGIBLE_NOTIFICATION")
                 return {
                     "status": "skipped",
                     "user_id": user_id,
                     "user_name": user_name or "Unknown",
                     "notification_type": "UNKNOWN",
                     "http_status": None,
-                    "completion_index": completion_index,
-                    "total_users": total_users,
                     "reason": "No eligible notification",
                 }
 
@@ -173,29 +172,17 @@ async def _process_user_async(
                 event_type,
                 db_engine=engine,
             ):
-                completion_index = await _mark_completion()
-                _log_user_status(position=position, total_users=total_users, user_id=user_id,
+                _log_user_status(user_id=user_id,
                                  user_name=user_name or "Unknown", notification_type=event_type,
-                                 status="SKIPPED")
+                                 status="SKIPPED", reason="ALREADY_NOTIFIED_TODAY")
                 return {
                     "status": "skipped",
                     "user_id": user_id,
                     "user_name": user_name or "Unknown",
                     "notification_type": event_type,
                     "http_status": None,
-                    "completion_index": completion_index,
-                    "total_users": total_users,
                     "reason": "Notification already exists for today",
                 }
-
-            _log_user_status(
-                position=position,
-                total_users=total_users,
-                user_id=user_id,
-                user_name=user_name or "Unknown",
-                notification_type=event_type,
-                status="STARTED",
-            )
 
             flow = FLOW_BY_EVENT_TYPE[event_type]
             service = NotificationService()
@@ -211,24 +198,22 @@ async def _process_user_async(
                 else:
                     result = await asyncio.to_thread(service.build_notification, NotificationRequest(user_id=user_id, flow=flow))
             if result is None:
-                completion_index = await _mark_completion()
+                skip_reason = getattr(service, "last_skip_reason", None) or "MISSING_REQUIRED_DATA"
+                final_status = "failed" if skip_reason == "LLM_NO_RESPONSE" else "skipped"
                 final_result = {
-                    "status": "skipped",
+                    "status": final_status,
                     "user_id": user_id,
                     "user_name": user_name or "Unknown",
                     "notification_type": event_type,
                     "http_status": None,
-                    "completion_index": completion_index,
-                    "total_users": total_users,
-                    "reason": getattr(service, "last_skip_reason", None) or "MISSING_REQUIRED_DATA",
+                    "reason": getattr(service, "last_error", None) or skip_reason,
                 }
                 _log_user_status(
-                    position=position,
-                    total_users=total_users,
                     user_id=user_id,
                     user_name=user_name or "Unknown",
                     notification_type=event_type,
-                    status="SKIPPED",
+                    status=final_status.upper(),
+                    reason=final_result["reason"],
                 )
                 return final_result
             reason = getattr(result, "reason", None) or getattr(service, "last_skip_reason", None)
@@ -248,64 +233,51 @@ async def _process_user_async(
                 or remote_status not in {"sent", None}
                 or (remote_status is None and not business_skip)
             ):
-                completion_index = await _mark_completion()
                 final_result = {
                     "status": "failed",
                     "user_id": user_id,
                     "user_name": user_name or "Unknown",
                     "notification_type": getattr(result, "notification_type", event_type),
                     "http_status": http_status,
-                    "completion_index": completion_index,
-                    "total_users": total_users,
                     "reason": getattr(result, "error", None) or reason or "unknown send failure",
                 }
                 _log_user_status(
-                    position=position,
-                    total_users=total_users,
                     user_id=user_id,
                     user_name=user_name or "Unknown",
                     notification_type=getattr(result, "notification_type", event_type),
                     status="FAILED",
                     http_status=http_status,
+                    reason=getattr(result, "error", None) or reason or "unknown send failure",
                 )
                 return final_result
             if remote_status is None and business_skip:
-                completion_index = await _mark_completion()
                 final_result = {
                     "status": "skipped",
                     "user_id": user_id,
                     "user_name": user_name or "Unknown",
                     "notification_type": getattr(result, "notification_type", event_type),
                     "http_status": http_status,
-                    "completion_index": completion_index,
-                    "total_users": total_users,
                     "reason": reason or getattr(result, "error", None) or "MISSING_REQUIRED_DATA",
                 }
                 _log_user_status(
-                    position=position,
-                    total_users=total_users,
                     user_id=user_id,
                     user_name=user_name or "Unknown",
                     notification_type=getattr(result, "notification_type", event_type),
                     status="SKIPPED",
                     http_status=http_status,
+                    reason=reason or getattr(result, "error", None) or "MISSING_REQUIRED_DATA",
                 )
                 return final_result
 
-            completion_index = await _mark_completion()
             final_result = {
                 "status": "success",
                 "user_id": user_id,
                 "user_name": user_name or "Unknown",
                 "notification_type": getattr(result, "notification_type", event_type),
                 "http_status": http_status,
-                "completion_index": completion_index,
-                "total_users": total_users,
                 "reason": None,
             }
             _log_user_status(
-                position=position,
-                total_users=total_users,
                 user_id=user_id,
                 user_name=user_name or "Unknown",
                 notification_type=getattr(result, "notification_type", event_type),
@@ -314,99 +286,54 @@ async def _process_user_async(
             )
             return final_result
         except Exception as exc:
-            completion_index = await _mark_completion()
-            _log_user_status(position=position, total_users=total_users, user_id=user_id,
+            _log_user_status(user_id=user_id,
                              user_name=user_name or "Unknown", notification_type="UNKNOWN",
-                             status="FAILED")
+                             status="FAILED", reason=str(exc))
             return {
                 "status": "failed",
                 "user_id": user_id,
                 "user_name": user_name or "Unknown",
                 "notification_type": "UNKNOWN",
                 "http_status": None,
-                "completion_index": completion_index,
-                "total_users": total_users,
                 "reason": str(exc),
             }
 
 
 async def run_scheduler_async(test_mode: bool | None = None) -> dict:
     started = datetime.now(SCHEDULER_TIMEZONE)
-    test_mode = bool(test_mode) if test_mode is not None else os.getenv("SCHEDULER_TEST_MODE", "").strip().lower() == "true"
+    test_mode = parse_test_mode(test_mode) if test_mode is not None else get_scheduler_test_mode()
     users = _collect_users()
     total_users = len(users)
     logger.info("============================================================")
-    logger.info("              AI-CLAN NOTIFICATION JOB")
+    logger.info("                 AI-CLAN NOTIFICATION JOB")
     logger.info("============================================================")
-    logger.info("Started : %s", started.strftime("%Y-%m-%d %H:%M:%S"))
-    logger.info("Total Users : %d", total_users)
-    successful_count = 0
-    failed_count = 0
-    skipped_count = 0
+    logger.info("Started             : %s IST", started.strftime("%Y-%m-%d %H:%M:%S"))
+    logger.info("Mode                : %s", "TEST" if test_mode else "PRODUCTION")
+    logger.info("SCHEDULER_TEST_MODE : %s (%s)", "TRUE" if test_mode else "FALSE", "ENABLED" if test_mode else "DISABLED")
+    logger.info("Total Users         : %d", total_users)
+    logger.info("============================================================")
+    logger.info("")
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_USERS)
-    completion_counter = {"value": 0}
-    completion_lock = asyncio.Lock()
-    task_kwargs = {
-        "user_id": None,
-        "user_name": None,
-        "position": None,
-        "total_users": total_users,
-        "test_mode": test_mode,
-        "semaphore": semaphore,
-    }
-    supports_completion_tracking = "completion_counter" in inspect.signature(_process_user_async).parameters
-    if supports_completion_tracking:
-        task_kwargs["completion_counter"] = completion_counter
-        task_kwargs["completion_counter_lock"] = completion_lock
-
-    tasks = []
-    for position, (user_id, user_name) in enumerate(users, start=1):
-        item_kwargs = dict(task_kwargs)
-        item_kwargs["user_id"] = user_id
-        item_kwargs["user_name"] = user_name
-        item_kwargs["position"] = position
-        tasks.append(asyncio.create_task(_process_user_async(**item_kwargs)))
-    results = await asyncio.gather(*tasks)
-    for position, result in enumerate(results, start=1):
-        if not isinstance(result, dict):
-            continue
-        _log_user_status(
-            position=position,
-            total_users=total_users,
-            user_id=result["user_id"],
-            user_name=result.get("user_name", "Unknown"),
-            notification_type=result.get("notification_type", "UNKNOWN"),
-            status=result.get("status", "failed").upper(),
-            http_status=result.get("http_status"),
-            reason=result.get("reason"),
-            final=True,
+    tasks = [
+        asyncio.create_task(
+            _process_user_async(
+                user_id,
+                user_name,
+                test_mode=test_mode,
+                semaphore=semaphore,
+            )
         )
-    details = []
-    for result in results:
-        if not isinstance(result, dict):
-            continue
-        details.append(result)
-        if result.get("status") == "success":
-            successful_count += 1
-        elif result.get("status") == "failed":
-            failed_count += 1
-        elif result.get("status") == "skipped":
-            skipped_count += 1
+        for user_id, user_name in users
+    ]
+    results = await asyncio.gather(*tasks)
     return {
         "total_users": total_users,
-        "successful_count": successful_count,
-        "failed_count": failed_count,
-        "skipped_count": skipped_count,
-        "details": details,
-        "duration_seconds": (datetime.now(SCHEDULER_TIMEZONE) - started).total_seconds(),
+        "details": results,
     }
 
 
 def main() -> None:
-    started_at = datetime.now(SCHEDULER_TIMEZONE)
-    test_mode = os.getenv("SCHEDULER_TEST_MODE", "").strip().lower() == "true"
-    cron_hour = os.getenv("CRON_HOUR", "00")
-    cron_minute = os.getenv("CRON_MINUTE", "00")
+    test_mode = get_scheduler_test_mode()
 
     try:
         with engine.connect() as lock_connection:
@@ -415,37 +342,13 @@ def main() -> None:
                 {"lock_key": SCHEDULER_LOCK_KEY},
             ).scalar()
             if not acquired:
-                logger.info("============================================================")
-                logger.info("                       JOB SUMMARY")
-                logger.info("============================================================")
-                logger.info("Total Users : 0")
-                logger.info("Successful  : 0")
-                logger.info("Failed      : 0")
-                logger.info("Skipped     : 1")
-                logger.info("Duration    : 0s")
-                logger.info("============================================================")
-                logger.info("              AI-CLAN JOB COMPLETED")
-                logger.info("============================================================")
+                logger.info("Scheduler lock is held by another job; exiting.")
                 return
 
             try:
-                summary = asyncio.run(run_scheduler_async(test_mode=test_mode))
-                details = summary.get("details", [])
-                total_users = summary["total_users"]
-                successful_count = summary["successful_count"]
-                failed_count = summary["failed_count"]
-                skipped_count = summary["skipped_count"]
-
+                asyncio.run(run_scheduler_async(test_mode=test_mode))
                 logger.info("============================================================")
-                logger.info("                       JOB SUMMARY")
-                logger.info("============================================================")
-                logger.info("Total Users : %d", total_users)
-                logger.info("Successful  : %d", successful_count)
-                logger.info("Failed      : %d", failed_count)
-                logger.info("Skipped     : %d", skipped_count)
-                logger.info("Duration    : %.2fs", summary.get("duration_seconds", 0))
-                logger.info("============================================================")
-                logger.info("              AI-CLAN JOB COMPLETED")
+                logger.info("                 AI-CLAN NOTIFICATION SENT")
                 logger.info("============================================================")
             finally:
                 lock_connection.execute(

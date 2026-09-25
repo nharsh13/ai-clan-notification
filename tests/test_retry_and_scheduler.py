@@ -604,6 +604,23 @@ def test_scheduler_logs_progress_names_types_and_skip_reasons(monkeypatch, caplo
     assert "[JOB] Eligible users got the notification" not in output
 
 
+def test_scheduler_test_mode_parses_string_values_and_daily_limit_semantics(monkeypatch):
+    assert run_daily.parse_test_mode("true") is True
+    assert run_daily.parse_test_mode("false") is False
+    assert run_daily.parse_test_mode(True) is True
+    assert run_daily.parse_test_mode(False) is False
+    assert run_daily.parse_test_mode("1") is True
+    assert run_daily.parse_test_mode("0") is False
+
+    monkeypatch.setenv("SCHEDULER_TEST_MODE", "true")
+    assert run_daily.get_scheduler_test_mode() is True
+
+    monkeypatch.setenv("SCHEDULER_TEST_MODE", "false")
+    assert run_daily.get_scheduler_test_mode() is False
+
+    monkeypatch.delenv("SCHEDULER_TEST_MODE", raising=False)
+
+
 def test_scheduler_test_mode_bypasses_only_duplicate_check(monkeypatch, caplog):
     engine = FakeSchedulerEngine([953])
     processed = []
