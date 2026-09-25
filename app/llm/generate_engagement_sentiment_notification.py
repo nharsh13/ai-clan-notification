@@ -98,6 +98,19 @@ FINAL CHECK:
 - Does it avoid mentioning a specific question?
 - Is there only one main message?
 
+
+FACTUAL ACCURACY:
+- Use ONLY information explicitly provided in the input data.
+- Do NOT invent user activities.
+- Do NOT say the user created posts unless the input explicitly says they created posts.
+- Do NOT say the user shared posts unless the input explicitly says they shared posts.
+- Do NOT say the user commented unless the input explicitly says they commented.
+- Do NOT say the user joined discussions unless the input explicitly says so.
+- Do NOT say the user liked, reacted, watched, answered, or shared anything unless the input explicitly supports it.
+- Do NOT use words such as "posts", "posting", "shared", "commented", "joined in", or "participated" unless supported by the input.
+- When there is no specific activity available, use a general encouragement message instead.
+
+
 Return ONLY valid JSON with exactly these two fields:
 
 {{

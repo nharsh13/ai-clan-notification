@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
+import logging
 
 from sqlalchemy import text
 
 from app.database.connection import engine
+
+logger = logging.getLogger(__name__)
 
 
 def _select_next_question_for_cycle(question_rows: list[dict], used_question_ids: set[int]) -> dict | None:
@@ -146,6 +149,7 @@ def get_eligible_user_qa(user_id: int, db_engine=engine) -> list[dict]:
         FROM public.sentiment_notification_history h
         WHERE h.user_id = :user_id
           AND h.status = 1
+          AND h.question_id IS NOT NULL
     """)
 
     with db_engine.connect() as connection:
@@ -165,6 +169,8 @@ def get_eligible_user_qa(user_id: int, db_engine=engine) -> list[dict]:
         if candidate_ids and candidate_ids.issubset(used_question_ids)
         else "UNUSED"
     )
+    candidate_ids = sorted(candidate_ids)
+    unused_question_ids = sorted(set(candidate_ids) - used_question_ids)
 
     selected_question_id = int(selected_question["question_id"])
     responses_query = text("""
@@ -199,10 +205,14 @@ def get_eligible_user_qa(user_id: int, db_engine=engine) -> list[dict]:
             "answer_id": None,
             "answer": None,
             "selection_status": selection_status,
+            "used_question_ids": sorted(used_question_ids),
+            "unused_question_ids": unused_question_ids,
         }]
 
     for row in response_rows:
         row["selection_status"] = selection_status
+        row["used_question_ids"] = sorted(used_question_ids)
+        row["unused_question_ids"] = unused_question_ids
     return response_rows
 
 
@@ -249,6 +259,22 @@ def save_sentiment_notification_history(
         return
 
     with db_engine.begin() as connection:
+        reset_user_ids = {
+            item["user_id"]
+            for item in valid_responses
+            if item.get("selection_status") == "CYCLE_RESET"
+        }
+        if reset_user_ids:
+            reset_query = text("""
+                UPDATE public.sentiment_notification_history
+                SET status = 0,
+                    modified_at = CURRENT_TIMESTAMP,
+                    modified_by = :user_id
+                WHERE user_id = :user_id
+                  AND status = 1
+            """)
+            for user_id in reset_user_ids:
+                connection.execute(reset_query, {"user_id": user_id})
         connection.execute(query, [
             {
                 "user_id": item["user_id"],
@@ -258,6 +284,12 @@ def save_sentiment_notification_history(
             }
             for item in valid_responses
         ])
+    for item in valid_responses:
+        logger.info(
+            "[SENTIMENT QA HISTORY SAVED] user_id=%s question_id=%s history_inserted=true",
+            item["user_id"],
+            item["question_id"],
+        )
 
 
 def get_user_response_rate(user_id: int):

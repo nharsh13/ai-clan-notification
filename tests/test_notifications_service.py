@@ -310,7 +310,7 @@ def test_performance_flow_can_fallback_when_no_video_and_reason_is_tracked(monke
     assert result.description
 
 
-def test_sentiment_flow_calls_llm_when_no_qa_and_sends_generated_notification(monkeypatch):
+def test_sentiment_flow_does_not_send_without_selected_question(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
     })
@@ -324,16 +324,9 @@ def test_sentiment_flow_calls_llm_when_no_qa_and_sends_generated_notification(mo
         allow_fallback=True,
     )
 
-    assert result is not None
-    assert result.notification_type == "SENTIMENT_QA"
-    assert result.reference_id == 0
-    assert result.video_popup is None
-    assert result.image is None
-    assert result.reason is None
-    assert len(generator.prompts) == 1
-    assert "daily questions" in generator.prompts[0].lower()
-    assert len(sender.calls) == 1
-    assert sender.calls[0]["notification_type"] == "SENTIMENT_QA"
+    assert result is None
+    assert generator.prompts == []
+    assert sender.calls == []
 
 
 def test_async_performance_fallback_is_active_by_default(monkeypatch):
@@ -354,7 +347,7 @@ def test_async_performance_fallback_is_active_by_default(monkeypatch):
     assert result.title.startswith("Ava")
 
 
-def test_async_sentiment_no_qa_calls_llm_and_sends_generated_notification(monkeypatch):
+def test_async_sentiment_does_not_send_without_selected_question(monkeypatch):
     monkeypatch.setattr(service_module, "get_user", lambda user_id, db_engine=None: {
         "user_name": "Ava", "app_language_code": "en", "video_language_ids": [1],
     })
@@ -365,16 +358,9 @@ def test_async_sentiment_no_qa_calls_llm_and_sends_generated_notification(monkey
     service = service_module.NotificationService(sender=sender, generator=generator)
     result = asyncio.run(service.build_notification_async(NotificationRequest(user_id=953, flow="sentiment", should_send=True)))
 
-    assert result is not None
-    assert result.notification_type == "SENTIMENT_QA"
-    assert result.reference_id == 0
-    assert result.video_popup is None
-    assert result.image is None
-    assert result.reason is None
-    assert len(generator.prompts) == 1
-    assert "daily questions" in generator.prompts[0].lower()
-    assert len(sender.calls) == 1
-    assert sender.calls[0]["notification_type"] == "SENTIMENT_QA"
+    assert result is None
+    assert generator.prompts == []
+    assert sender.calls == []
 
 
 def test_async_engagement_no_data_falls_back_without_special_flag(monkeypatch):
@@ -811,7 +797,7 @@ def test_sentiment_saves_all_eligible_history_after_successful_send(monkeypatch)
     assert [row["answer_id"] for row in saved] == [3, 5]
 
 
-def test_sentiment_with_no_eligible_qa_calls_llm_and_raises_on_failure(monkeypatch):
+def test_sentiment_with_no_eligible_qa_skips_without_calling_llm(monkeypatch):
     class FailingGenerator:
         def generate(self, prompt, **kwargs):
             raise ValueError("LLM unavailable")
@@ -828,7 +814,7 @@ def test_sentiment_with_no_eligible_qa_calls_llm_and_raises_on_failure(monkeypat
     )
 
     assert result is None
-    assert service.last_skip_reason == "LLM_NO_RESPONSE"
+    assert service.last_skip_reason == "MISSING_REQUIRED_DATA"
     assert sender.calls == []
 
 
@@ -882,12 +868,13 @@ def test_get_sentiment_returns_unused_qa(monkeypatch):
 
     assert service.get_sentiment(953) == {
         "user_id": 953,
-        "responses": [{
+        "notification_type": "SENTIMENT_QA",
+        "next_question": {
             "question_id": 4,
             "question": "How do you handle feedback?",
-            "answer_id": 8,
-            "answer": "I listen carefully.",
-        }],
+            "answers": [{"answer_id": 8, "answer": "I listen carefully."}],
+        },
+        "selection_status": "UNUSED",
     }
 
 
@@ -903,12 +890,13 @@ def test_get_sentiment_reuses_qa_when_all_are_exhausted(monkeypatch):
 
     service = service_module.NotificationService()
 
-    assert service.get_sentiment(953)["responses"] == [{
+    result = service.get_sentiment(953)
+    assert result["next_question"] == {
         "question_id": 3,
         "question": "What kind of customers do you like most?",
-        "answer_id": 9,
-        "answer": "Curious customers.",
-    }]
+        "answers": [{"answer_id": 9, "answer": "Curious customers."}],
+    }
+    assert result["selection_status"] == "UNUSED"
 
 
 def test_sentiment_llm_failure_does_not_save_history(monkeypatch):

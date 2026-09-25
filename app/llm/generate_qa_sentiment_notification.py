@@ -12,62 +12,115 @@ def build_no_qa_sentiment_notification_prompt(
     user_name: str,
     language: str,
     question: str | None = None,
+    answer_options: list[str] | None = None,
 ) -> str:
     """
     Build the prompt for the no-Q&A sentiment fallback notification.
+
+    When there are no answers for the selected question:
+    - Use the question to understand the situation.
+    - Use the available answer options as possible helpful behaviors.
+    - Select one relevant behavior.
+    - Do not assume the user selected that behavior.
     """
 
     if question is not None:
+        answer_options = answer_options or []
+
+        answer_options_text = "\n".join(
+            f"- {option}"
+            for option in answer_options
+            if isinstance(option, str) and option.strip()
+        )
+
+        if not answer_options_text:
+            answer_options_text = "- No behavior options provided."
+
         return f"""
-Generate ONE CLAN learning notification using only the selected question below.
+Generate ONE CLAN learning notification using the selected question and the available helpful behaviors below.
 
 User: {user_name}
 Language: {language}
-Selected question: {question}
+
+SELECTED QUESTION:
+{question}
+
+AVAILABLE HELPFUL BEHAVIORS:
+{answer_options_text}
 
 REASONING:
 - Understand the situation described by the selected question.
-- Identify the positive, helpful behavior that fits that situation.
-- Give ONE simple tip that encourages that behavior.
-- Base the notification only on the selected question.
+- Look at the available helpful behaviors.
+- Choose ONE behavior that best fits the situation described by the question.
+- Use the chosen behavior only as a helpful suggestion.
+- Do NOT assume the user selected this behavior.
+- Do NOT say the user already follows this behavior.
 - Do NOT invent an answer to the question.
 - Do NOT assume what the user feels, thinks, knows, or does.
-- Do NOT say the user already follows the suggested behavior.
 - Do NOT claim the user learned something.
-- Do NOT mention answers, missing data, or that the question has no answers.
-- Do NOT give advice unrelated to the question.
+- Do NOT mention that the question has no answers.
+- Do NOT mention missing data.
+- Do NOT mention the available answer options in the notification.
+- Do NOT give advice unrelated to the selected question.
+- Do NOT create a new behavior that is not supported by the available behaviors.
+- Use the word "customer".
+- Never use "shopper", "shoppers", "buyer", or similar words.
 
 LANGUAGE:
 - Use VERY SIMPLE, everyday words and short sentences.
 - Write naturally in the requested language.
 - Be positive, helpful, warm, and respectful.
+- Write for users who may understand only basic English or basic local-language words.
 - Avoid difficult, formal, technical, professional, or business words.
+- If a simpler word is possible, always use it.
 - Do not use "please".
-- Do not use emojis or complicated motivational phrases.
+- Do not use emojis.
+- Do not use complicated motivational phrases.
 
 TITLE:
-- Must start with "Hello {user_name}," and include the user's name.
+- Must start with "Hello {user_name},".
+- Must include the user's name.
 - Keep it short: 3–6 simple words.
 - Make it positive and friendly.
-- Do not mention the question in the title.
+- Do not mention the question.
+- Do not mention that there is no answer.
+- Do not use "great job" unless the question clearly supports it.
 
 DESCRIPTION:
 - Keep it around 15–25 words.
 - Use 1–2 short sentences.
-- Give ONE clear and useful behavior or tip.
-- Keep it positive and practical. Do not pressure, shame, blame, or criticize the user.
+- Give ONE simple and useful tip.
+- Base the tip on the selected question and ONE chosen behavior.
+- Make the tip sound natural.
+- Do NOT use labels such as:
+  "Learning:"
+  "Action:"
+  "Tip:"
+  "Suggestion:"
+  "Advice:"
+- Do NOT use headings.
+- Do NOT use bullet points.
+- Do NOT use a fixed format.
+- Do NOT use a colon to create a label.
+- Do not pressure, shame, blame, or criticize the user.
 
 IMPORTANT APP BEHAVIOUR:
 - Clicking the notification only opens the CLAN app.
 - Do NOT tell the user to answer the question from the notification.
 - Do NOT say that clicking the notification opens a specific question.
+- Do NOT tell the user that they selected any answer.
 
 FINAL CHECK:
-- Is the notification based only on the selected question?
-- Is the suggested behavior relevant, positive, and helpful?
-- Did I avoid assumptions and invented information?
-- Is there only ONE clear behavior or tip?
-- Is the language simple, and are the title and description within the requested lengths?
+- Is the notification based on the selected question?
+- Did I choose ONE relevant behavior from the available behaviors?
+- Did I avoid assuming the user selected that behavior?
+- Is there only ONE clear tip?
+- Is the language simple?
+- Is the title 3–6 words?
+- Is the description around 15–25 words?
+- Does the description avoid "Learning:" and "Action:"?
+- Does the notification avoid mentioning missing answers?
+- Does the notification avoid mentioning the answer-option list?
 
 Return ONLY valid JSON with exactly these two fields:
 
@@ -162,7 +215,7 @@ def build_qa_sentiment_notification_prompt(
     prepared_qa: dict,
 ) -> str:
     """
-    Build the prompt for the Q&A sentiment notification.
+    Build the prompt for the answered Q&A sentiment notification.
     """
 
     qa_json = json.dumps(
@@ -176,7 +229,7 @@ Generate ONE personalized CLAN learning notification.
 User: {user_name}
 Language: {language}
 
-Answered CLAN questions and responses:
+QUESTION AND RELATED ANSWERS:
 {qa_json}
 
 IMPORTANT LANGUAGE RULES:
@@ -190,19 +243,42 @@ IMPORTANT LANGUAGE RULES:
 - Do not use complicated motivational phrases.
 - Do not use "please".
 - Do not use emojis.
+- Always use the word "customer".
+- Never use "shopper", "shoppers", "buyer", or similar words.
 
 LEARNING RULES:
-- Read ALL provided answers together.
-- Find ONE useful learning or improvement point.
-- Give ONE simple suggestion based only on the answers.
-- Give ONE clear action the user can try in their work.
-- Use only information supported by the answers.
-- Do NOT create one notification for each question.
-- Do NOT repeat the questions.
+- Read all provided answers for the selected question together.
+- Find ONE useful and positive learning point that is clearly supported by the answers.
+- Give ONE simple suggestion based only on the provided answers.
+- Do NOT create a new action that is not clearly supported by the answers.
+- Do NOT invent facts about the user.
+- Do NOT assume feelings, behavior, knowledge, or experience that is not shown in the answers.
+- Combine the useful point and suggestion naturally into the notification.
+- Do NOT use separate labels for the learning point or suggestion.
+- Do NOT use a fixed format.
+- Do NOT repeat the question.
 - Do NOT repeat the answers.
 - Do NOT summarize all the answers.
-- Do NOT invent facts about the user.
 - Do NOT make unsupported claims.
+
+DESCRIPTION:
+- Write ONE natural notification message.
+- Keep it short: about 12–20 words.
+- Use 1–2 short sentences.
+- Make the message sound like a normal notification.
+- Give ONE useful insight or suggestion naturally.
+- Do NOT use labels such as:
+  "Learning:"
+  "Action:"
+  "Tip:"
+  "Suggestion:"
+  "Advice:"
+- Do NOT use headings or bullet points.
+- Do NOT use a colon to create a label.
+- Do NOT separate the message into different sections.
+- Keep the message positive and respectful.
+- Do not make the user feel bad or guilty.
+- Do not say the user's answer is wrong or bad.
 
 TITLE:
 - MUST start with "Hello {user_name},".
@@ -212,24 +288,24 @@ TITLE:
 - Make it positive and friendly.
 - Do not use difficult or formal words.
 - Do not use complicated motivational phrases.
-
-DESCRIPTION:
-- Keep it short: about 12–20 words.
-- Use 1–2 short sentences.
-- Give ONE useful suggestion.
-- Give ONE clear action.
-- Keep it positive and respectful.
-- Do not make the user feel bad or guilty.
-- Do not say the user's answer is wrong or bad.
+- Do not use "great job" unless the provided information clearly supports it.
 
 IMPORTANT APP BEHAVIOUR:
 - Clicking the notification only opens the CLAN app.
 - Do NOT ask the user to answer a specific question from the notification.
-- Do NOT mention a specific question.
+- Do NOT mention a specific question in the notification.
 - Do NOT tell the user to click the notification to answer a question.
-- The notification should give a useful tip based on the user's previous answers.
+- The notification should provide a useful tip based on the user's previous answer.
 
 DO NOT:
+- Use "Learning:".
+- Use "Action:".
+- Use "Tip:".
+- Use "Suggestion:".
+- Use "Advice:".
+- Use labels or headings inside the description.
+- Use bullet points.
+- Use a fixed template.
 - Use difficult words.
 - Use formal words.
 - Use professional words.
@@ -245,15 +321,21 @@ DO NOT:
 - Add information that is not provided.
 
 FINAL CHECK:
+- Does the title start with "Hello {user_name},"?
 - Is the title 3–6 simple words?
 - Is the description about 12–20 words?
-- Is there only ONE learning point?
-- Is there only ONE useful action?
+- Is the description natural and conversational?
+- Is there only ONE useful learning point?
+- Is there only ONE useful suggestion?
 - Is the suggestion based only on the provided answers?
+- Does the description avoid "Learning:" and "Action:"?
+- Does the description avoid all headings and labels?
 - Is the language simple?
 - Is the message polite and friendly?
 - Does it avoid mentioning a specific question?
 - Does it avoid saying the user can answer directly from the notification?
+- Always use the word "customer".
+- Never use "shopper", "shoppers", "buyer", or similar words.
 
 Return ONLY valid JSON with exactly these two fields:
 

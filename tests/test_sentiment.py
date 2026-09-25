@@ -136,6 +136,51 @@ def test_history_save_records_no_answer_question_with_null_response_and_answer_i
     assert ", 1" in engine.connection.query
 
 
+def test_cycle_reset_is_committed_with_the_new_question_history():
+    class WriteConnection:
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, query, params):
+            self.statements.append((str(query), params))
+
+    class WriteEngine:
+        def __init__(self):
+            self.connection = WriteConnection()
+
+        def begin(self):
+            return self
+
+        def __enter__(self):
+            return self.connection
+
+        def __exit__(self, *args):
+            return False
+
+    engine = WriteEngine()
+    sent.save_sentiment_notification_history([{
+        "user_id": 953,
+        "question_id": 1,
+        "response_id": None,
+        "answer_id": None,
+        "selection_status": "CYCLE_RESET",
+    }], cast(Engine, engine))
+
+    assert len(engine.connection.statements) == 2
+    reset_query, reset_params = engine.connection.statements[0]
+    insert_query, insert_params = engine.connection.statements[1]
+    assert "UPDATE public.sentiment_notification_history" in reset_query
+    assert "WHERE user_id = :user_id" in reset_query
+    assert reset_params == {"user_id": 953}
+    assert "INSERT INTO public.sentiment_notification_history" in insert_query
+    assert insert_params == [{
+        "user_id": 953,
+        "response_id": None,
+        "question_id": 1,
+        "answer_id": None,
+    }]
+
+
 # ============================================================
 # ENGAGEMENT SENTIMENT — CLAN ENGAGEMENT / RESPONSE RATE
 # ============================================================
@@ -584,6 +629,8 @@ def test_get_eligible_user_qa_handles_question_without_answers():
         "answer_id": None,
         "answer": None,
         "selection_status": "UNUSED",
+        "used_question_ids": [],
+        "unused_question_ids": [99],
     }]
 
 

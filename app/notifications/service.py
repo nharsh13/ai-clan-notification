@@ -5,7 +5,6 @@ import logging
 
 from sqlalchemy import text
 
-from app.config import OPENAI_API_KEY
 from app.database.connection import engine
 from app.database.notification_repository import get_next_manual_notification_for_user
 from app.database.user_repository import get_user
@@ -36,7 +35,6 @@ from app.sentiment.sentiment import (
 logger = logging.getLogger(__name__)
 
 NO_ENGAGEMENT_DATA = "NO_ENGAGEMENT_DATA"
-NO_QA_DATA = "NO_QA_DATA"
 NO_VIDEO_RECOMMENDATION = "NO_VIDEO_RECOMMENDATION"
 LLM_NO_RESPONSE = "LLM_NO_RESPONSE"
 MISSING_REQUIRED_DATA = "MISSING_REQUIRED_DATA"
@@ -313,12 +311,19 @@ class NotificationService:
         if flow == "sentiment":
             eligible_responses = get_eligible_user_qa(user_id, self.db_engine)
             if not eligible_responses:
-                return user_name, {
-                    "language": language,
-                    "prepared_qa": None,
-                    "history_records": [],
-                    "context": "your recent responses and workplace reflections",
-                }
+                self.last_skip_reason = MISSING_REQUIRED_DATA
+                return None
+            selected = eligible_responses[0]
+            logger.info(
+                "[SENTIMENT QA SELECTION] user_id=%s selected_question_id=%s selected_question=%r used_question_ids=%s unused_question_ids=%s answer_ids=%s answer_texts=%s",
+                user_id,
+                selected.get("question_id"),
+                selected.get("question"),
+                selected.get("used_question_ids", []),
+                selected.get("unused_question_ids", []),
+                [row.get("answer_id") for row in eligible_responses if row.get("answer_id") is not None],
+                [row.get("answer") for row in eligible_responses if row.get("answer") is not None],
+            )
             prepared_qa = prepare_user_qa(
                 user_id,
                 self.db_engine,
@@ -455,6 +460,11 @@ class NotificationService:
 
         flow_context = self._build_flow_context(user_id, flow)
         if flow_context is None:
+            # SENTIMENT_QA must always be grounded in an application-selected
+            # question. Do not send a generic fallback when there is no
+            # eligible assigned question to advance the user's cycle.
+            if flow == "sentiment":
+                return None
             if allow_fallback:
                 profile = self._get_user_profile(user_id, require_video_language=flow == "performance")
                 user_name = profile["user_name"] if profile else f"User {user_id}"
@@ -609,6 +619,8 @@ class NotificationService:
 
         flow_context = self._build_flow_context(user_id, flow)
         if flow_context is None:
+            if flow == "sentiment":
+                return None
             if allow_fallback:
                 profile = self._get_user_profile(user_id, require_video_language=flow == "performance")
                 user_name = profile["user_name"] if profile else f"User {user_id}"
