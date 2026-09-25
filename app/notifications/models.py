@@ -45,6 +45,7 @@ class NotificationProcessingResult(BaseModel):
     error: Optional[str] = None
     remote_send_status: Optional[str] = None
     remote_send_response: Optional[dict] = None
+    remote_send_error_type: Optional[str] = None
 
 
 NotificationResponse = Notification

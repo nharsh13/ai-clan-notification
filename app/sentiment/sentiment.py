@@ -284,14 +284,6 @@ def save_sentiment_notification_history(
             }
             for item in valid_responses
         ])
-    for item in valid_responses:
-        logger.info(
-            "[SENTIMENT QA HISTORY SAVED] user_id=%s question_id=%s history_inserted=true",
-            item["user_id"],
-            item["question_id"],
-        )
-
-
 def get_user_response_rate(user_id: int):
     """
     Calculate CLAN question response rate for a user.

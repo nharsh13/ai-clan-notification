@@ -39,7 +39,6 @@ for noisy_logger_name in (
 ):
     logging.getLogger(noisy_logger_name).setLevel(logging.CRITICAL)
 
-SCHEDULER_LOCK_KEY = 781234567
 SCHEDULER_TIMEZONE = ZoneInfo("Asia/Kolkata")
 MAX_CONCURRENT_USERS = 5
 logger = logging.getLogger(__name__)
@@ -110,6 +109,8 @@ def _log_user_status(
     status: str,
     http_status: int | None = None,
     reason: str | None = None,
+    raw_response: str | None = None,
+    terminal_message: str | None = None,
 ) -> None:
     name = user_name or "Unknown"
     notification_type = notification_type or "UNKNOWN"
@@ -117,12 +118,34 @@ def _log_user_status(
         reason = " ".join(str(reason).split())
     prefix = f"{user_id} | {name:<30} | {notification_type:<22} | {status:<7}"
     if status == "SUCCESS":
-        logger.info("%s", prefix)
+        logger.info("%s %s", user_id, raw_response or "")
+    elif terminal_message:
+        logger.info("%s %s", user_id, terminal_message)
     elif status == "FAILED":
         http = f"HTTP {http_status}" if http_status is not None else "HTTP unavailable"
         logger.info("%s | %s | %s", prefix, http, reason or "Unknown error")
     elif status == "SKIPPED":
         logger.info("%s | %s", prefix, reason or "Unspecified")
+
+
+def _classify_terminal_error(error: object, error_type: str | None = None) -> str | None:
+    message = str(error or "").lower()
+    if any(marker in message for marker in (
+        "insufficient_quota", "quota exceeded", "billing", "credit exhausted",
+        "out of credits", "exceeded your current quota", "usage limit",
+    )):
+        return "LLM_CREDIT_OUT"
+    exception_type = (error_type or type(error).__name__).lower()
+    if any(marker in exception_type for marker in (
+        "connecterror", "connecttimeout", "readtimeout", "timeout", "connectionerror",
+    )) or any(marker in message for marker in (
+        "connection refused", "connection error", "connecterror", "connecttimeout",
+        "readtimeout", "network is unreachable", "name or service not known",
+        "temporary failure in name resolution", "failed to establish a new connection",
+        "all connection attempts failed", "remote end closed connection",
+    )):
+        return "REMOTE_URL_NOT_RESPONDING"
+    return None
 
 
 def _collect_users() -> list[tuple[int, str]]:
@@ -199,6 +222,9 @@ async def _process_user_async(
                     result = await asyncio.to_thread(service.build_notification, NotificationRequest(user_id=user_id, flow=flow))
             if result is None:
                 skip_reason = getattr(service, "last_skip_reason", None) or "MISSING_REQUIRED_DATA"
+                classified_error = _classify_terminal_error(
+                    getattr(service, "last_error", None), getattr(service, "last_error_type", None)
+                )
                 final_status = "failed" if skip_reason == "LLM_NO_RESPONSE" else "skipped"
                 final_result = {
                     "status": final_status,
@@ -214,6 +240,7 @@ async def _process_user_async(
                     notification_type=event_type,
                     status=final_status.upper(),
                     reason=final_result["reason"],
+                    terminal_message=classified_error,
                 )
                 return final_result
             reason = getattr(result, "reason", None) or getattr(service, "last_skip_reason", None)
@@ -233,13 +260,17 @@ async def _process_user_async(
                 or remote_status not in {"sent", None}
                 or (remote_status is None and not business_skip)
             ):
+                failure_reason = getattr(result, "error", None) or reason or "unknown send failure"
+                terminal_message = _classify_terminal_error(
+                    failure_reason, getattr(result, "remote_send_error_type", None)
+                )
                 final_result = {
                     "status": "failed",
                     "user_id": user_id,
                     "user_name": user_name or "Unknown",
                     "notification_type": getattr(result, "notification_type", event_type),
                     "http_status": http_status,
-                    "reason": getattr(result, "error", None) or reason or "unknown send failure",
+                    "reason": failure_reason,
                 }
                 _log_user_status(
                     user_id=user_id,
@@ -247,7 +278,8 @@ async def _process_user_async(
                     notification_type=getattr(result, "notification_type", event_type),
                     status="FAILED",
                     http_status=http_status,
-                    reason=getattr(result, "error", None) or reason or "unknown send failure",
+                    reason=failure_reason,
+                    terminal_message=terminal_message,
                 )
                 return final_result
             if remote_status is None and business_skip:
@@ -283,12 +315,14 @@ async def _process_user_async(
                 notification_type=getattr(result, "notification_type", event_type),
                 status="SUCCESS",
                 http_status=http_status,
+                raw_response=(getattr(result, "remote_send_response", None) or {}).get("raw_response", ""),
             )
             return final_result
         except Exception as exc:
+            terminal_message = _classify_terminal_error(exc)
             _log_user_status(user_id=user_id,
                              user_name=user_name or "Unknown", notification_type="UNKNOWN",
-                             status="FAILED", reason=str(exc))
+                             status="FAILED", reason=str(exc), terminal_message=terminal_message)
             return {
                 "status": "failed",
                 "user_id": user_id,
@@ -336,25 +370,10 @@ def main() -> None:
     test_mode = get_scheduler_test_mode()
 
     try:
-        with engine.connect() as lock_connection:
-            acquired = lock_connection.execute(
-                text("SELECT pg_try_advisory_lock(:lock_key)"),
-                {"lock_key": SCHEDULER_LOCK_KEY},
-            ).scalar()
-            if not acquired:
-                logger.info("Scheduler lock is held by another job; exiting.")
-                return
-
-            try:
-                asyncio.run(run_scheduler_async(test_mode=test_mode))
-                logger.info("============================================================")
-                logger.info("                 AI-CLAN NOTIFICATION SENT")
-                logger.info("============================================================")
-            finally:
-                lock_connection.execute(
-                    text("SELECT pg_advisory_unlock(:lock_key)"),
-                    {"lock_key": SCHEDULER_LOCK_KEY},
-                )
+        asyncio.run(run_scheduler_async(test_mode=test_mode))
+        logger.info("============================================================")
+        logger.info("                 AI-CLAN NOTIFICATION SENT")
+        logger.info("============================================================")
     except Exception:
         logger.exception("[ERROR] Unexpected job exception")
         raise

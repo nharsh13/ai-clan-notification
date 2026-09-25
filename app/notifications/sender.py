@@ -114,6 +114,7 @@ class NotificationSender:
             "remote_url": self.remote_url,
             "request_payload": payload,
             "response": response_body,
+            "raw_response": response.text,
             "status_code": response.status_code,
         }
 
@@ -185,5 +186,6 @@ class NotificationSender:
             "remote_url": self.remote_url,
             "request_payload": payload,
             "response": response_body,
+            "raw_response": response.text,
             "status_code": response.status_code,
         }

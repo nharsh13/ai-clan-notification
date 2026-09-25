@@ -37,6 +37,26 @@ logger = logging.getLogger(__name__)
 NO_ENGAGEMENT_DATA = "NO_ENGAGEMENT_DATA"
 NO_VIDEO_RECOMMENDATION = "NO_VIDEO_RECOMMENDATION"
 LLM_NO_RESPONSE = "LLM_NO_RESPONSE"
+
+
+def _is_terminal_output_error(error: Exception) -> bool:
+    message = str(error).lower()
+    error_type = type(error).__name__.lower()
+    return (
+        any(marker in message for marker in (
+            "insufficient_quota", "quota exceeded", "billing", "credit exhausted",
+            "out of credits", "exceeded your current quota", "usage limit",
+        ))
+        or any(marker in error_type for marker in (
+            "connecterror", "connecttimeout", "readtimeout", "timeout", "connectionerror",
+        ))
+        or any(marker in message for marker in (
+            "connection refused", "connection error", "connecterror", "connecttimeout",
+            "readtimeout", "network is unreachable", "name or service not known",
+            "temporary failure in name resolution", "failed to establish a new connection",
+            "all connection attempts failed", "remote end closed connection",
+        ))
+    )
 MISSING_REQUIRED_DATA = "MISSING_REQUIRED_DATA"
 
 
@@ -69,6 +89,7 @@ class NotificationService:
         self.engine = NotificationEngine()
         self.last_skip_reason: str | None = None
         self.last_error: str | None = None
+        self.last_error_type: str | None = None
 
     def _get_user_profile(
         self,
@@ -183,13 +204,15 @@ class NotificationService:
                             self.db_engine,
                         )
                 except Exception as exc:  # pragma: no cover - defensive fallback
-                    logger.exception(
-                        "Notification send failed for user=%s flow=%s",
-                        user_id,
-                        flow,
-                    )
+                    if not _is_terminal_output_error(exc):
+                        logger.exception(
+                            "Notification send failed for user=%s flow=%s",
+                            user_id,
+                            flow,
+                        )
                     response.remote_send_status = "failed"
                     response.error = str(exc)
+                    response.remote_send_error_type = type(exc).__name__
                     response.reason = reason or response.error
 
         return response
@@ -434,6 +457,7 @@ class NotificationService:
     ) -> NotificationProcessingResult | None:
         self.last_skip_reason = None
         self.last_error = None
+        self.last_error_type = None
         if isinstance(user_id, NotificationRequest):
             request = user_id
             user_id = request.user_id
@@ -503,11 +527,13 @@ class NotificationService:
         except Exception as exc:
             self.last_skip_reason = LLM_NO_RESPONSE
             self.last_error = str(exc)
-            logger.exception(
-                "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
-                user_id,
-                flow,
-            )
+            self.last_error_type = type(exc).__name__
+            if not _is_terminal_output_error(exc):
+                logger.exception(
+                    "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
+                    user_id,
+                    flow,
+                )
             return None
         if (
             not isinstance(notification_data, dict)
@@ -572,13 +598,15 @@ class NotificationService:
                             self.db_engine,
                         )
                 except Exception as exc:  # pragma: no cover - defensive fallback
-                    logger.exception(
-                        "Notification send failed for user=%s flow=%s",
-                        user_id,
-                        flow,
-                    )
+                    if not _is_terminal_output_error(exc):
+                        logger.exception(
+                            "Notification send failed for user=%s flow=%s",
+                            user_id,
+                            flow,
+                        )
                     response.remote_send_status = "failed"
                     response.error = str(exc)
+                    response.remote_send_error_type = type(exc).__name__
                     response.reason = response.reason or str(exc)
 
         return response
@@ -593,6 +621,7 @@ class NotificationService:
     ) -> NotificationProcessingResult | None:
         self.last_skip_reason = None
         self.last_error = None
+        self.last_error_type = None
         if isinstance(user_id, NotificationRequest):
             request = user_id
             user_id = request.user_id
@@ -659,11 +688,13 @@ class NotificationService:
         except Exception as exc:
             self.last_skip_reason = LLM_NO_RESPONSE
             self.last_error = str(exc)
-            logger.exception(
-                "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
-                user_id,
-                flow,
-            )
+            self.last_error_type = type(exc).__name__
+            if not _is_terminal_output_error(exc):
+                logger.exception(
+                    "[NOTIFICATION] ERROR: LLM generation failed for user=%s flow=%s",
+                    user_id,
+                    flow,
+                )
             return None
         if (
             not isinstance(notification_data, dict)
@@ -735,6 +766,7 @@ class NotificationService:
                     )
                     response.remote_send_status = "failed"
                     response.error = str(exc)
+                    response.remote_send_error_type = type(exc).__name__
                     response.reason = response.reason or str(exc)
 
         return response
