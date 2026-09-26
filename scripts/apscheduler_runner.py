@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime
+from datetime import date, datetime, time
 from threading import Event, Lock
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
@@ -19,16 +19,26 @@ _scheduler: BackgroundScheduler | None = None
 
 @dataclass(frozen=True)
 class ScheduleConfig:
+	start_date: datetime
 	hour: int
 	minute: int
 
 
 def load_schedule_config() -> ScheduleConfig:
 	load_dotenv()
+	start_date_value = os.getenv("CRON_START_DATE")
 	hour_value = os.getenv("CRON_HOUR")
 	minute_value = os.getenv("CRON_MINUTE")
+	if start_date_value is None:
+		raise ValueError("CRON_START_DATE is required (format: YYYY-MM-DD)")
 	if hour_value is None or minute_value is None:
 		raise ValueError("CRON_HOUR and CRON_MINUTE are required")
+	try:
+		if len(start_date_value) != 10 or start_date_value[4] != "-" or start_date_value[7] != "-":
+			raise ValueError
+		start_date = date.fromisoformat(start_date_value)
+	except ValueError as exc:
+		raise ValueError("CRON_START_DATE must be a valid date in YYYY-MM-DD format") from exc
 	try:
 		hour = int(hour_value)
 		minute = int(minute_value)
@@ -40,7 +50,11 @@ def load_schedule_config() -> ScheduleConfig:
 	if not 0 <= minute <= 59:
 		raise ValueError("CRON_MINUTE must be between 0 and 59")
 
-	return ScheduleConfig(hour=hour, minute=minute)
+	return ScheduleConfig(
+		start_date=datetime.combine(start_date, time.min, tzinfo=SCHEDULER_TIMEZONE),
+		hour=hour,
+		minute=minute,
+	)
 
 
 def create_scheduler(config: ScheduleConfig | None = None) -> BackgroundScheduler:
@@ -51,6 +65,7 @@ def create_scheduler(config: ScheduleConfig | None = None) -> BackgroundSchedule
 		trigger=CronTrigger(
 			hour=schedule.hour,
 			minute=schedule.minute,
+			start_date=schedule.start_date,
 			timezone=SCHEDULER_TIMEZONE,
 		),
 		id="daily_notification_scheduler",

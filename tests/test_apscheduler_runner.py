@@ -4,14 +4,20 @@ import scripts.apscheduler_runner as runner
 
 
 def test_load_schedule_config_reads_environment(monkeypatch):
+	monkeypatch.setenv("CRON_START_DATE", "2026-09-27")
 	monkeypatch.setenv("CRON_HOUR", "11")
 	monkeypatch.setenv("CRON_MINUTE", "10")
 
-	assert runner.load_schedule_config() == runner.ScheduleConfig(hour=11, minute=10)
+	assert runner.load_schedule_config() == runner.ScheduleConfig(
+		start_date=runner.datetime(2026, 9, 27, tzinfo=runner.SCHEDULER_TIMEZONE),
+		hour=11,
+		minute=10,
+	)
 
 
 def test_load_schedule_config_requires_environment_values(monkeypatch):
 	monkeypatch.setattr(runner, "load_dotenv", lambda: None)
+	monkeypatch.delenv("CRON_START_DATE", raising=False)
 	monkeypatch.delenv("CRON_HOUR", raising=False)
 	monkeypatch.delenv("CRON_MINUTE", raising=False)
 
@@ -32,7 +38,13 @@ def test_create_scheduler_uses_ist_and_daily_time(monkeypatch):
 
 	monkeypatch.setattr(runner, "BackgroundScheduler", FakeScheduler)
 
-	runner.create_scheduler(runner.ScheduleConfig(hour=11, minute=10))
+	runner.create_scheduler(
+		runner.ScheduleConfig(
+			start_date=runner.datetime(2026, 9, 27, tzinfo=runner.SCHEDULER_TIMEZONE),
+			hour=11,
+			minute=10,
+		)
+	)
 
 	assert created["timezone"] == runner.SCHEDULER_TIMEZONE
 	assert created["timezone"].key == "Asia/Kolkata"
@@ -43,6 +55,9 @@ def test_create_scheduler_uses_ist_and_daily_time(monkeypatch):
 	assert trigger.timezone.key == "Asia/Kolkata"
 	assert str(trigger.fields[5]) == "11"
 	assert str(trigger.fields[6]) == "10"
+	assert trigger.start_date == runner.datetime(
+		2026, 9, 27, tzinfo=runner.SCHEDULER_TIMEZONE
+	)
 
 
 def test_start_scheduler_is_idempotent(monkeypatch):
@@ -90,7 +105,18 @@ def test_shutdown_scheduler_stops_and_clears_scheduler():
 	],
 )
 def test_load_schedule_config_rejects_invalid_ranges(monkeypatch, name, value):
+	monkeypatch.setenv("CRON_START_DATE", "2026-09-27")
 	monkeypatch.setenv(name, value)
 
 	with pytest.raises(ValueError):
+		runner.load_schedule_config()
+
+
+@pytest.mark.parametrize("value", ["", "2026-9-27", "2026-02-30", "27-09-2026"])
+def test_load_schedule_config_rejects_invalid_start_date(monkeypatch, value):
+	monkeypatch.setenv("CRON_START_DATE", value)
+	monkeypatch.setenv("CRON_HOUR", "0")
+	monkeypatch.setenv("CRON_MINUTE", "43")
+
+	with pytest.raises(ValueError, match="CRON_START_DATE"):
 		runner.load_schedule_config()
